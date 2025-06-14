@@ -1,0 +1,8 @@
+# ignore build directory
+build/
+
+# ignore input and output directories
+output/
+
+# ignore tests directory
+tests/
