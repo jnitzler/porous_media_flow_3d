@@ -249,7 +249,7 @@ void Darcy<dim>::run_simulation(const std::string &input_path,
                                 const std::string &output_path) {
   setup_grid_and_dofs();
   read_input_npy(input_path);
-  // generate_ref_input();
+  generate_ref_input();
   generate_coordinates();
   assemble_preconditioner();
   assemble_system();
@@ -258,7 +258,7 @@ void Darcy<dim>::run_simulation(const std::string &input_path,
   // output the results
   output_pvtu(output_path);
   output_full_velocity_npy(output_path);
-  output_velocity_at_observation_points_npy(output_path);
+  //output_velocity_at_observation_points_npy(output_path);
   // output_field_at_observation_points_npy(output_path);
 
 }  // end run simulation

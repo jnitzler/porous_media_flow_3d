@@ -13,6 +13,7 @@ void Darcy<dim>::generate_ref_input() {
   const RandomMedium::RefScalar<dim> ref_scalar;
   x_vec.reinit(rf_dof_handler.n_dofs());
   VectorTools::interpolate(rf_dof_handler, ref_scalar, x_vec);
+  x_vec = 1.0;
 }
 
 // generate coordinates at which observations are present
@@ -105,12 +106,7 @@ class PressureBoundaryValues : public Function<dim> {
 template <int dim>
 double PressureBoundaryValues<dim>::value(
     const Point<dim> &p, const unsigned int /*component*/) const {
-  return 1 - p[0] * p[0] + (p[1] - 0.5) * (p[1] - 0.5);  // HF model
-  // return 1 - 0.75*p[0]; // LF pressure BC for bad model
-  // return 1 - p[0] + std::abs(p[1]-0.5); // LF pressure for moderate model
-
-  // return 1 - p[0] * p[0] + (0.25 * std::sin(p[1])); // HF pressure BC
-  // return p[1] * p[1] + 1; // LF pressure BC lung example
+  return p[2];  // HF model
 }
 
 // ------------- assemble preconditioner ---------
@@ -290,7 +286,7 @@ void Darcy<dim>::assemble_system() {
       // per cell loop over all cell faces of this cell and check of on boundary
       // if so add boundary contribution to local rhs
       for (const auto &face : cell->face_iterators())
-        if (face->at_boundary()) {
+        if (face->at_boundary() && face->boundary_id() == 1) { // only outer boundary
           fe_face_values.reinit(cell, face);
 
           pressure_boundary_values.value_list(
@@ -393,8 +389,21 @@ void Darcy<dim>::setup_grid_and_dofs() {
   block_component[dim] = 1;
 
   // generate grid and distribute dofs
-  GridGenerator::hyper_cube(triangulation, 0, 1);
-  triangulation.refine_global(5);
+  Point<dim> inner_center(0.0, 0.0, 0.25);
+  Point<dim> outer_center(0.0, 0.0, 0.0);
+  double inner_radius = 0.5; // inner radius
+  double outer_radius = 1.0; // outer radius
+  unsigned int n_cells = 	12;  // n_cells
+
+  GridGenerator::eccentric_hyper_shell(
+    triangulation,
+    inner_center,
+    outer_center,
+    inner_radius,
+    outer_radius,
+    n_cells);
+
+  triangulation.refine_global(4);
   dof_handler.distribute_dofs(fe);
 
   // generate grid and distribute dofs for random field
@@ -440,14 +449,19 @@ void Darcy<dim>::setup_grid_and_dofs() {
 
   // take care of constraints on preconditioner and system
   {
+    const FEValuesExtractors::Vector velocity(0);
+    const FEValuesExtractors::Scalar pressure(dim);
+
     // system constraints
     constraints.clear();
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    DoFTools::make_zero_boundary_constraints(
+        dof_handler, 0, constraints, fe.component_mask(velocity));
+
     constraints.close();
 
     // take care of constraints for preconditioner
     preconditioner_constraints.clear();
-    const FEValuesExtractors::Scalar pressure(dim);
     DoFTools::make_hanging_node_constraints(dof_handler,
                                             preconditioner_constraints);
 
