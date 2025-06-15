@@ -106,8 +106,28 @@ class PressureBoundaryValues : public Function<dim> {
 template <int dim>
 double PressureBoundaryValues<dim>::value(
     const Point<dim> &p, const unsigned int /*component*/) const {
-  return p[2];  // HF model
+  return 0.0;  // HF model
 }
+
+// -------- velocity boundary values ----------------------------
+template <int dim>
+class VelocityBoundaryValues : public Function<dim> {
+ public:
+  VelocityBoundaryValues() : Function<dim>(3) {}
+
+  void vector_value(const Point<dim> &p,
+               Vector<double> & vector) const override;
+};
+
+template <int dim>
+void VelocityBoundaryValues<dim>::vector_value(
+    const Point<dim> &p, Vector<double> &vector) const {
+
+      vector[0] = 0.0;
+      vector[1] = 0.0;
+      vector[2] = p[2]; // pressure
+}
+
 
 // ------------- assemble preconditioner ---------
 template <int dim>
@@ -278,30 +298,32 @@ void Darcy<dim>::assemble_system() {
                  div_phi_u[i] * phi_p[j]) *
                 fe_values.JxW(q);
           }  // end inner dof loop
-          // local_rhs(i) += (-phi_p[i] * rhs_values[q]) * fe_values.JxW(q); //
+           //local_rhs(i) += (-phi_p[i] * rhs_values[q]) * fe_values.JxW(q); //
+           local_rhs(i) += (-phi_p[i] * 1.0) * fe_values.JxW(q); //
           // --> zero anyways
         }  // end outer dof loop
       }
 
-      // per cell loop over all cell faces of this cell and check of on boundary
-      // if so add boundary contribution to local rhs
-      for (const auto &face : cell->face_iterators())
-        if (face->at_boundary() && face->boundary_id() == 1) { // only outer boundary
-          fe_face_values.reinit(cell, face);
+    // per cell loop over all cell faces of this cell and check of on boundary
+    // if so add boundary contribution to local rhs
+    for (const auto &face : cell->face_iterators())
+      if (face->at_boundary() && face->boundary_id() == 1) { // only outer boundary
+        fe_face_values.reinit(cell, face);
 
-          pressure_boundary_values.value_list(
-              fe_face_values.get_quadrature_points(), boundary_values);
+        pressure_boundary_values.value_list(
+            fe_face_values.get_quadrature_points(), boundary_values);
 
-          for (unsigned int q = 0; q < n_face_q_points; ++q)
-            for (unsigned int i = 0; i < dofs_per_cell; ++i) {
-              const Tensor<1, dim> phi_i_u =
-                  fe_face_values[velocities].value(i, q);
+        for (unsigned int q = 0; q < n_face_q_points; ++q)
+          for (unsigned int i = 0; i < dofs_per_cell; ++i) {
+            const Tensor<1, dim> phi_i_u =
+                fe_face_values[velocities].value(i, q);
 
-              local_rhs(i) += -(phi_i_u *  //
-                                fe_face_values.normal_vector(q) *
-                                boundary_values[q] * fe_face_values.JxW(q));
-            }  // end face dof loops
-        }      // end face loop
+            local_rhs(i) += -(phi_i_u *  //
+                              fe_face_values.normal_vector(q) *
+                              boundary_values[q] * fe_face_values.JxW(q));
+          }  // end face dof loops
+      }      // end face loop
+
 
       // take care of the symmetries
       for (unsigned int i = 0; i < dofs_per_cell; ++i)
@@ -453,11 +475,13 @@ void Darcy<dim>::setup_grid_and_dofs() {
     const FEValuesExtractors::Scalar pressure(dim);
 
     // system constraints
+    VelocityBoundaryValues<dim> velocity_bc_pres;
     constraints.clear();
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
     DoFTools::make_zero_boundary_constraints(
-        dof_handler, 0, constraints, fe.component_mask(velocity));
-
+    dof_handler, 0, constraints, fe.component_mask(velocity));
+    //VectorTools::interpolate_boundary_values(
+   //    dof_handler, 1, velocity_bc_pres, constraints, fe.component_mask(pressure));
     constraints.close();
 
     // take care of constraints for preconditioner
