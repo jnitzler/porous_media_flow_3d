@@ -55,7 +55,6 @@
 
 // a timer
 #include <deal.II/base/timer.h>
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -71,91 +70,114 @@
 using namespace dealii;
 
 // ----- Define the class structure ------------------------------------------
-namespace darcy {
+namespace darcy
+{
 
-// ----------- Darcy class ---------------------------
-template <int dim>
-class Darcy {
- public:
-  explicit Darcy(const unsigned int degree);
-  void run(const std::string &input_path, const std::string &output_path);
+  // ----------- Darcy class ---------------------------
+  template <int dim>
+  class Darcy
+  {
+  public:
+    explicit Darcy(const unsigned int degree);
+    void
+    run(const std::string &input_path, const std::string &output_path);
 
- private:
-  void generate_coordinates();
-  void run_simulation(const std::string &input_path,
-                      const std::string &output_path);
-  void read_input_npy(const std::string &input_path);
-  void generate_ref_input();
-  void read_primary_solution(const std::string &input_path);
-  void setup_grid_and_dofs();
-  void assemble_preconditioner();
-  void assemble_system();
-  void solve();
-  void output_pvtu(const std::string &output_path) const;
-  void output_full_velocity_npy(const std::string &output_path);
-  void output_velocity_at_observation_points_npy(
-      const std::string &output_path);
-  void output_field_at_observation_points_npy(const std::string &output_path);
+  private:
+    void
+    generate_coordinates();
+    void
+    run_simulation(const std::string &input_path,
+                   const std::string &output_path);
+    void
+    read_input_npy(const std::string &input_path);
+    void
+    generate_ref_input();
+    void
+    read_primary_solution(const std::string &input_path);
+    void
+    setup_grid_and_dofs();
+    void
+    assemble_preconditioner();
+    void
+    assemble_system();
+    void
+    solve();
+    void
+    output_pvtu(const std::string &output_path) const;
+    void
+    output_full_velocity_npy(const std::string &output_path);
+    void
+    output_velocity_at_observation_points_npy(const std::string &output_path);
+    void
+    output_field_at_observation_points_npy(const std::string &output_path);
 
-  void write_data_to_npy(const std::string &filename, std::vector<double> &data,
-                         unsigned int rows, unsigned int columns) const;
-  void read_upstream_gradient_npy(const std::string &input_file_path);
-  void overwrite_adjoint_rhs();
-  void final_inner_adjoint_product();
+    void
+    write_data_to_npy(const std::string   &filename,
+                      std::vector<double> &data,
+                      unsigned int         rows,
+                      unsigned int         columns) const;
+    void
+    read_upstream_gradient_npy(const std::string &input_file_path);
+    void
+    overwrite_adjoint_rhs();
+    void
+    final_inner_adjoint_product();
 
-  const unsigned int degree;
+    const unsigned int degree;
 
-  // Triangulation<dim> triangulation;
-  parallel::distributed::Triangulation<dim> triangulation;
-  FESystem<dim> fe;
-  DoFHandler<dim> dof_handler;
+    // Triangulation<dim> triangulation;
+    parallel::distributed::Triangulation<dim> triangulation;
+    FESystem<dim>                             fe;
+    DoFHandler<dim>                           dof_handler;
 
-  // random field setup
-  FESystem<dim> rf_fe_system;
-  DoFHandler<dim> rf_dof_handler;
+    // random field setup
+    FESystem<dim>   rf_fe_system;
+    DoFHandler<dim> rf_dof_handler;
 
-  AffineConstraints<double> constraints;
-  AffineConstraints<double> preconditioner_constraints;
+    AffineConstraints<double> constraints;
+    AffineConstraints<double> preconditioner_constraints;
 
-  TrilinosWrappers::BlockSparseMatrix system_matrix;
-  TrilinosWrappers::BlockSparseMatrix precondition_matrix;
+    TrilinosWrappers::BlockSparseMatrix system_matrix;
+    TrilinosWrappers::BlockSparseMatrix precondition_matrix;
 
-  TrilinosWrappers::MPI::BlockVector solution;
-  TrilinosWrappers::MPI::BlockVector system_rhs;
-  TrilinosWrappers::MPI::BlockVector temp_vec;
-  TrilinosWrappers::MPI::BlockVector solution_distributed;
+    TrilinosWrappers::MPI::BlockVector solution;
+    TrilinosWrappers::MPI::BlockVector system_rhs;
+    TrilinosWrappers::MPI::BlockVector temp_vec;
+    TrilinosWrappers::MPI::BlockVector solution_distributed;
 
-  TrilinosWrappers::BlockSparseMatrix block_mass_matrix;
-  std::vector<double> grad_log_lik_x_distributed;
-  std::vector<double> grad_log_lik_x;
-  FullMatrix<double>
-      grad_pde_x;  // New PDE gradient that needs to be implemented
+    TrilinosWrappers::BlockSparseMatrix block_mass_matrix;
+    std::vector<double>                 grad_log_lik_x_distributed;
+    std::vector<double>                 grad_log_lik_x;
+    FullMatrix<double>
+      grad_pde_x; // New PDE gradient that needs to be implemented
 
-  // random field stuff
-  Vector<double> x_vec;  // the input vector for the simulation
+    // random field stuff
+    Vector<double> x_vec; // the input vector for the simulation
 
-  // Vector<double> random_field_vec;
-  std::vector<Point<dim>> spatial_coordinates;
-  std::vector<double> output_data;
+    // Vector<double> random_field_vec;
+    std::vector<Point<dim>> spatial_coordinates;
+    std::vector<double>     output_data;
 
-  ConditionalOStream pcout;
-  TimerOutput computing_timer;           // timer for sub programs
-  std::vector<double> adjoint_data_vec;  // adjoint data vector with partial
-                                         // derivative of likelihood
-  std::vector<std::vector<double>>
-      data_vec;  // general input data which will be split to actual data
-  TrilinosWrappers::MPI::BlockVector
-      solution_primary_problem;  // distributed solution vector of the primary
-                                 // problem
-  TrilinosWrappers::MPI::BlockVector solution_primary_distributed;
+    ConditionalOStream  pcout;
+    TimerOutput         computing_timer;  // timer for sub programs
+    std::vector<double> adjoint_data_vec; // adjoint data vector with partial
+                                          // derivative of likelihood
+    std::vector<std::vector<double>>
+      data_vec; // general input data which will be split to actual data
+    TrilinosWrappers::MPI::BlockVector
+      solution_primary_problem; // distributed solution vector of the primary
+                                // problem
+    TrilinosWrappers::MPI::BlockVector solution_primary_distributed;
 
-  void setup_system_matrix(
+    void
+    setup_system_matrix(
       const std::vector<IndexSet> &system_partitioning,
       const std::vector<IndexSet> &system_relevant_partitioning);
 
-  void setup_preconditioner(
+    void
+    setup_preconditioner(
       const std::vector<IndexSet> &system_partitioning,
       const std::vector<IndexSet> &system_relevant_partitioning);
-};
-}  // namespace darcy
+  };
+} // namespace darcy
 #endif
