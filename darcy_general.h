@@ -88,27 +88,6 @@ namespace darcy
     pcout << "Random field successfully read in." << std::endl;
   }
 
-  // -------- right hand side ----------------------------
-  // Note: not used atm
-  template <int dim>
-  class RightHandSide : public Function<dim>
-  {
-  public:
-    RightHandSide()
-      : Function<dim>(1)
-    {}
-
-    double
-    value(const Point<dim> &p, const unsigned int component = 0) const override;
-  };
-
-  template <int dim>
-  double
-  RightHandSide<dim>::value(const Point<dim> & /*p*/,
-                            const unsigned int /*component*/) const
-  {
-    return 0; // zero right hand side --> incompressible flow
-  }
 
   // -------- pressure boundary values ----------------------------
   template <int dim>
@@ -128,7 +107,7 @@ namespace darcy
   PressureBoundaryValues<dim>::value(const Point<dim> &p,
                                      const unsigned int /*component*/) const
   {
-    return 0.0; // HF model
+    return 0.0;
   }
 
   // -------- velocity boundary values ----------------------------
@@ -200,9 +179,6 @@ namespace darcy
 
             local_matrix = 0;
 
-            // right_hand_side.value_list(fe_values.get_quadrature_points(),
-            //                             rhs_values);
-
             // get rf function values and permeability tensor per cell
             std::vector<double> rf_values(n_q_points);
             Tensor<2, dim>      K_mat;
@@ -215,7 +191,6 @@ namespace darcy
                 RandomMedium::get_k_mat(rf_values[q], K_mat);
 
                 // evaluate fe values on all dofs first
-
                 JxW_q = fe_values.JxW(q);
                 std::vector<Tensor<1, dim>> grad_phi_p(dofs_per_cell);
                 for (unsigned int k = 0; k < dofs_per_cell; ++k)
@@ -286,6 +261,7 @@ namespace darcy
     std::vector<Tensor<1, dim>>          phi_u(dofs_per_cell);
     std::vector<double>                  div_phi_u(dofs_per_cell);
     std::vector<double>                  phi_p(dofs_per_cell);
+    std::vector<Tensor<1, dim>>          grad_phi_p(dofs_per_cell);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
     Vector<double>     local_rhs(dofs_per_cell);
@@ -311,7 +287,8 @@ namespace darcy
             local_matrix = 0;
             local_rhs    = 0;
 
-            std::vector<double>               boundary_values(n_face_q_points);
+            // pressure boundary values
+            std::vector<double> boundary_values_pressure(n_face_q_points);
             const PressureBoundaryValues<dim> pressure_boundary_values;
 
             // get rf function values and permeability tensor per cell
@@ -321,7 +298,7 @@ namespace darcy
             Tensor<2, dim>      K_mat;
             fe_rf_values.get_function_values(x_vec, rf_values);
 
-            // loop over quadrature points
+            // ---- INTERIOR loop over quadrature points ------------ //
             for (unsigned int q = 0; q < n_q_points; ++q)
               {
                 // get the permeability tensor at quadrature point
@@ -331,60 +308,121 @@ namespace darcy
                 // evaluate fe values on all dofs first
                 for (unsigned int k = 0; k < dofs_per_cell; ++k)
                   {
-                    phi_u[k]     = fe_values[velocities].value(k, q);
-                    div_phi_u[k] = fe_values[velocities].divergence(k, q);
-                    phi_p[k]     = fe_values[pressure].value(k, q);
+                    phi_u[k]      = fe_values[velocities].value(k, q);
+                    div_phi_u[k]  = fe_values[velocities].divergence(k, q);
+                    phi_p[k]      = fe_values[pressure].value(k, q);
+                    grad_phi_p[k] = fe_values[pressure].gradient(k, q);
                   }
 
                 // loop over cell dofs
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                   {
                     // for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                    for (unsigned int j = 0; j <= i; ++j)
+                    for (unsigned int j = 0; j < dofs_per_cell; ++j)
                       {
                         // assemble local system matrix
                         local_matrix(i, j) +=
-                          (phi_u[i] * k_inverse * phi_u[j] -
-                           phi_p[i] * div_phi_u[j] - div_phi_u[i] * phi_p[j]) *
+                          (phi_u[i] * k_inverse * phi_u[j]
+                           // - phi_p[i] * div_phi_u[j]  // old term from
+                           // divergence direct
+                           + grad_phi_p[i] *
+                               phi_u[j] // new term from divergence by parts
+                           + grad_phi_p[j] *
+                               phi_u[i] // new term from divergence by parts
+                           //- div_phi_u[i] * phi_p[j] // old original div term
+                           ) *
                           fe_values.JxW(q);
                       } // end inner dof loop
-                    // local_rhs(i) += (-phi_p[i] * rhs_values[q]) *
-                    // fe_values.JxW(q); //
+
+                    // take care of source term
                     local_rhs(i) += (-phi_p[i] * 1.0) * fe_values.JxW(q); //
-                    // --> zero anyways
                   } // end outer dof loop
               }
 
-            // per cell loop over all cell faces of this cell and check of on
-            // boundary if so add boundary contribution to local rhs
+            // ------ FACE loops over faces (split in two parts) ---- //
+            // part 1: weak pressure BC on outer boundary
             for (const auto &face : cell->face_iterators())
-              if (face->at_boundary() && face->boundary_id() == 1)
-                { // only outer boundary
-                  fe_face_values.reinit(cell, face);
+              {
+                if (face->at_boundary() && face->boundary_id() == 1)
+                  {
+                    fe_face_values.reinit(cell, face);
 
-                  pressure_boundary_values.value_list(
-                    fe_face_values.get_quadrature_points(), boundary_values);
+                    pressure_boundary_values.value_list(
+                      fe_face_values.get_quadrature_points(),
+                      boundary_values_pressure);
 
-                  for (unsigned int q = 0; q < n_face_q_points; ++q)
-                    for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                    for (unsigned int q = 0; q < n_face_q_points; ++q)
                       {
-                        const Tensor<1, dim> phi_i_u =
-                          fe_face_values[velocities].value(i, q);
+                        // loop over face dofs i
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          {
+                            const Tensor<1, dim> phi_i_u =
+                              fe_face_values[velocities].value(i, q);
 
-                        local_rhs(i) +=
-                          -(phi_i_u * //
-                            fe_face_values.normal_vector(q) *
-                            boundary_values[q] * fe_face_values.JxW(q));
-                      } // end face dof loops
-                } // end face loop
+                            const double phi_i_p =
+                              fe_face_values[pressure].value(i, q);
 
+                            // add contribution to local rhs of the pressure
+                            // (weakly)
+                            local_rhs(i) += -(phi_i_u * //
+                                              fe_face_values.normal_vector(q) *
+                                              boundary_values_pressure[q] *
+                                              fe_face_values.JxW(q));
 
-            // take care of the symmetries
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
-              for (unsigned int j = i + 1; j < dofs_per_cell; ++j)
-                {
-                  local_matrix(i, j) = local_matrix(j, i);
-                }
+                            // loop over other face dofs j
+                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                              {
+                                const Tensor<1, dim> phi_j_u =
+                                  fe_face_values[velocities].value(j, q);
+                                const double phi_j_p =
+                                  fe_face_values[pressure].value(j, q);
+
+                                // add contribution to local matrix from unknown
+                                // velocity
+                                local_matrix(i, j) -=
+                                  (phi_i_p * (fe_face_values.normal_vector(q) *
+                                              phi_j_u) +
+                                   phi_j_p * (fe_face_values.normal_vector(q) *
+                                              phi_i_u)) *
+                                  fe_face_values.JxW(q);
+                              } // end inner dof loop j
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
+
+                // part 2: weak velocity BC on inner boundary
+                if (face->at_boundary() && face->boundary_id() == 0)
+                  {
+                    fe_face_values.reinit(cell, face);
+
+                    for (unsigned int q = 0; q < n_face_q_points; ++q)
+                      {
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          {
+                            const double phi_i_p =
+                              fe_face_values[pressure].value(i, q);
+                            // add contribution to local rhs of the velocity
+                            // (weakly) -> no contribution as u is zero on
+                            // this boundary
+
+                            // add contribution to local matrix of the
+                            // pressure
+                            // loop over other face dofs j
+                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                              {
+                                const Tensor<1, dim> phi_j_u =
+                                  fe_face_values[velocities].value(j, q);
+
+                                local_matrix(i, j) +=
+                                  (phi_i_p * //
+                                   (phi_j_u * fe_face_values.normal_vector(q)) *
+                                   fe_face_values.JxW(q));
+
+                              } // end inner dof loop j
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
+              } // end face loop
 
             cell->get_dof_indices(local_dof_indices);
             constraints.distribute_local_to_global(local_matrix,
@@ -552,13 +590,6 @@ namespace darcy
       VelocityBoundaryValues<dim> velocity_bc_pres;
       constraints.clear();
       DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-      DoFTools::make_zero_boundary_constraints(dof_handler,
-                                               0,
-                                               constraints,
-                                               fe.component_mask(velocity));
-      // VectorTools::interpolate_boundary_values(
-      //    dof_handler, 1, velocity_bc_pres, constraints,
-      //    fe.component_mask(pressure));
       constraints.close();
 
       // take care of constraints for preconditioner
