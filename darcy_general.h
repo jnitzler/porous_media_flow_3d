@@ -322,13 +322,13 @@ namespace darcy
                       {
                         // assemble local system matrix
                         local_matrix(i, j) +=
-                          (phi_u[i] * k_inverse * phi_u[j]
-                           // - phi_p[i] * div_phi_u[j]  // old term from
+                          (phi_u[i] * k_inverse * phi_u[j] -
+                           phi_p[j] * div_phi_u[i] // old term from
                            // divergence direct
                            + grad_phi_p[i] *
                                phi_u[j] // new term from divergence by parts
-                           + grad_phi_p[j] *
-                               phi_u[i] // new term from divergence by parts
+                           //+ grad_phi_p[j] *
+                           //    phi_u[i] // new term from divergence by parts
                            //- div_phi_u[i] * phi_p[j] // old original div term
                            ) *
                           fe_values.JxW(q);
@@ -374,16 +374,17 @@ namespace darcy
                               {
                                 const Tensor<1, dim> phi_j_u =
                                   fe_face_values[velocities].value(j, q);
-                                const double phi_j_p =
-                                  fe_face_values[pressure].value(j, q);
+                                // const double phi_j_p =
+                                //   fe_face_values[pressure].value(j, q);
 
                                 // add contribution to local matrix from unknown
                                 // velocity
                                 local_matrix(i, j) -=
                                   (phi_i_p * (fe_face_values.normal_vector(q) *
-                                              phi_j_u) +
-                                   phi_j_p * (fe_face_values.normal_vector(q) *
-                                              phi_i_u)) *
+                                              phi_j_u)) * // +
+                                  // phi_j_p * (fe_face_values.normal_vector(q)
+                                  // *
+                                  //           phi_i_u)) *
                                   fe_face_values.JxW(q);
                               } // end inner dof loop j
                           } // end face dof loops i
@@ -399,23 +400,25 @@ namespace darcy
                       {
                         for (unsigned int i = 0; i < dofs_per_cell; ++i)
                           {
-                            const double phi_i_p =
-                              fe_face_values[pressure].value(i, q);
                             // add contribution to local rhs of the velocity
                             // (weakly) -> no contribution as u is zero on
                             // this boundary
+                            const Tensor<1, dim> phi_i_u =
+                              fe_face_values[velocities].value(i, q);
+
 
                             // add contribution to local matrix of the
                             // pressure
                             // loop over other face dofs j
                             for (unsigned int j = 0; j < dofs_per_cell; ++j)
                               {
-                                const Tensor<1, dim> phi_j_u =
-                                  fe_face_values[velocities].value(j, q);
+                                const double phi_j_p =
+                                  fe_face_values[pressure].value(j, q);
+
 
                                 local_matrix(i, j) +=
-                                  (phi_i_p * //
-                                   (phi_j_u * fe_face_values.normal_vector(q)) *
+                                  (phi_j_p * //
+                                   (phi_i_u * fe_face_values.normal_vector(q)) *
                                    fe_face_values.JxW(q));
 
                               } // end inner dof loop j
