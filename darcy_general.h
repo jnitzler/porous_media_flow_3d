@@ -527,9 +527,9 @@ namespace darcy
     block_component[dim] = 1;
 
     // generate grid and distribute dofs
-    Point<dim>   inner_center(0.0, 0.0, 0.25);
+    Point<dim>   inner_center(0.0, 0.1, 0.25);
     Point<dim>   outer_center(0.0, 0.0, 0.0);
-    double       inner_radius = 0.5; // inner radius
+    double       inner_radius = 0.3; // inner radius
     double       outer_radius = 1.0; // outer radius
     unsigned int n_cells      = 12;  // n_cells
 
