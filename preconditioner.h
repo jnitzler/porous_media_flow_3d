@@ -64,7 +64,8 @@ namespace Preconditioner
   public:
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,
                              const PreconditionerTypeaS &ap_S_inv,
-                             const PreconditionerTypeM  &ap_M_inv);
+                             const PreconditionerTypeM  &ap_M_inv,
+                             TimerOutput & computing_timer);
 
     void
     vmult(TrilinosWrappers::MPI::BlockVector       &dst,
@@ -74,6 +75,7 @@ namespace Preconditioner
     const TrilinosWrappers::BlockSparseMatrix &system_matrix;
     const PreconditionerTypeaS                &ap_S_inv;
     const PreconditionerTypeM                 &ap_M_inv;
+     TimerOutput & computing_timer;
   };
 
   // constructor
@@ -81,10 +83,12 @@ namespace Preconditioner
   BlockSchurPreconditioner<PreconditionerTypeaS, PreconditionerTypeM>::
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,
                              const PreconditionerTypeaS &ap_S_inv,
-                             const PreconditionerTypeM  &ap_M_inv)
+                             const PreconditionerTypeM  &ap_M_inv,
+                             TimerOutput & computing_timer)
     : system_matrix(System)
     , ap_S_inv(ap_S_inv)
     , ap_M_inv(ap_M_inv)
+    ,computing_timer(computing_timer)
   {}
 
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
@@ -93,6 +97,7 @@ namespace Preconditioner
     TrilinosWrappers::MPI::BlockVector       &dst,
     const TrilinosWrappers::MPI::BlockVector &src) const
   {
+    TimerOutput::Scope timer_section(computing_timer, "   Apply preconditioner");
     TrilinosWrappers::MPI::Vector utmp(src.block(1));
     // tmp(complete_index_set(system_matrix.block(1, 1).m())) // there is a
     // problem in parallel

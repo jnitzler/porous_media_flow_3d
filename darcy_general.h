@@ -509,10 +509,20 @@ namespace darcy
     Table<2, DoFTools::Coupling> coupling(dim + 1, dim + 1);
     for (unsigned int c = 0; c < dim + 1; ++c)
       for (unsigned int d = 0; d < dim + 1; ++d)
-        if (!((c == dim) && (d == dim)))
-          coupling[c][d] = DoFTools::always;
-        else
+        if (((c == dim) && (d == dim)))
           coupling[c][d] = DoFTools::none;
+        else
+          {
+            if (c < dim && d < dim)
+              {
+                if (c == d)
+                  coupling[c][d] = DoFTools::always;
+                else
+                  coupling[c][d] = DoFTools::none;
+              }
+            else
+              coupling[c][d] = DoFTools::always;
+          }
 
     DoFTools::make_sparsity_pattern(dof_handler,
                                     coupling,
@@ -545,8 +555,8 @@ namespace darcy
                                               MPI_COMM_WORLD);
 
     Table<2, DoFTools::Coupling> coupling_precond(dim + 1, dim + 1);
-    for (unsigned int c = 0; c < dim + 1; ++c)
-      for (unsigned int d = 0; d < dim + 1; ++d)
+    for (unsigned int c = dim; c < dim + 1; ++c)
+      for (unsigned int d = dim; d < dim + 1; ++d)
         if (c == d)
           coupling_precond[c][d] = DoFTools::always;
         else
@@ -697,7 +707,7 @@ namespace darcy
     // -----------------------
     const Preconditioner::BlockSchurPreconditioner<decltype(op_S_inv),
                                                    decltype(ap_M_inv)>
-      block_preconditioner(system_matrix, op_S_inv, ap_M_inv);
+      block_preconditioner(system_matrix, op_S_inv, ap_M_inv, computing_timer);
     pcout << "Block preconditioner for the system matrix created." << std::endl;
 
     // ------------------ construct the final inverse operator for the system
@@ -733,12 +743,18 @@ namespace darcy
         distributed_solution(i) = 0;
 
     pcout << "Starting iterative solver..." << std::endl;
-    solver_system.solve(system_matrix,
-                        distributed_solution,
-                        system_rhs,
-                        block_preconditioner);
+    {
+      TimerOutput::Scope timer_section(computing_timer, "   Solve gmres");
+      solver_system.solve(system_matrix,
+                          distributed_solution,
+                          system_rhs,
+                          block_preconditioner);
+    }
     constraints.distribute(distributed_solution);
     solution = distributed_solution;
+
+    pcout << solver_control_system.final_reduction()
+          << " GMRES reduction to obtain convergence." << std::endl;
 
     pcout << solver_control_system.last_step()
           << " GMRES iterations to obtain convergence." << std::endl;
