@@ -153,7 +153,8 @@ namespace darcy
                               update_quadrature_points | update_gradients);
     FEFaceValues<dim>  fe_face_values(fe,
                                      face_quadrature_formula,
-                                     update_values | update_gradients | update_normal_vectors |
+                                     update_values | update_gradients |
+                                       update_normal_vectors |
                                        update_quadrature_points |
                                        update_JxW_values);
     FEValues<dim>      fe_rf_values(rf_fe_system,
@@ -197,7 +198,7 @@ namespace darcy
                 RandomMedium::get_k_mat(rf_values[q], K_mat);
 
                 // evaluate fe values on all dofs first
-                const auto JxW_q = fe_values.JxW(q);
+                const auto                  JxW_q = fe_values.JxW(q);
                 std::vector<Tensor<1, dim>> grad_phi_p(dofs_per_cell);
                 for (unsigned int k = 0; k < dofs_per_cell; ++k)
                   {
@@ -216,7 +217,7 @@ namespace darcy
                       } // end inner dof loop
 
                   } // end outer dof loop
-              }     // end quadrature loop
+              } // end quadrature loop
 
             // take care of the symmetries
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
@@ -245,7 +246,7 @@ namespace darcy
                               fe_face_values[pressure].value(i, q);
 
                             const auto grad_phi_i_p =
-                                    fe_face_values[pressure].gradient(i, q);
+                              fe_face_values[pressure].gradient(i, q);
 
                             // loop over other face dofs j
                             for (unsigned int j = 0; j < dofs_per_cell; ++j)
@@ -254,16 +255,18 @@ namespace darcy
                                   fe_face_values[pressure].value(j, q);
 
                                 const auto grad_phi_j_p =
-                                        fe_face_values[pressure].gradient(j, q);
+                                  fe_face_values[pressure].gradient(j, q);
 
-                                local_matrix(i, j) += (-grad_phi_i_p * normal * phi_j_p
-                                  - (phi_i_p * (grad_phi_j_p * normal - tau * phi_j_p))) *
+                                local_matrix(i, j) +=
+                                  (-grad_phi_i_p * normal * phi_j_p -
+                                   (phi_i_p *
+                                    (grad_phi_j_p * normal - tau * phi_j_p))) *
                                   fe_face_values.JxW(q);
                               } // end inner dof loop j
-                          }     // end face dof loops i
-                      }         // end quadrature loop for faces
-                  }             // end if statement
-              }                 // end face loop
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
+              } // end face loop
 
             preconditioner_constraints.distribute_local_to_global(
               local_matrix, local_dof_indices, precondition_matrix);
@@ -432,9 +435,9 @@ namespace darcy
                                   //           phi_i_u)) *
                                   fe_face_values.JxW(q);
                               } // end inner dof loop j
-                          }     // end face dof loops i
-                      }         // end quadrature loop for faces
-                  }             // end if statement
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
 
                 // part 2: weak velocity BC on inner boundary
                 if (face->at_boundary() && face->boundary_id() == 0)
@@ -467,10 +470,10 @@ namespace darcy
                                    fe_face_values.JxW(q));
 
                               } // end inner dof loop j
-                          }     // end face dof loops i
-                      }         // end quadrature loop for faces
-                  }             // end if statement
-              }                 // end face loop
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
+              } // end face loop
 
             cell->get_dof_indices(local_dof_indices);
             constraints.distribute_local_to_global(local_matrix,
@@ -480,7 +483,7 @@ namespace darcy
                                                    system_rhs);
 
           } // end if locally owned
-      }     // end cell loop
+      } // end cell loop
 
     system_matrix.compress(VectorOperation::add);
     system_rhs.compress(VectorOperation::add);
@@ -645,10 +648,10 @@ namespace darcy
       DoFTools::make_hanging_node_constraints(dof_handler,
                                               preconditioner_constraints);
 
-//      DoFTools::make_zero_boundary_constraints(dof_handler,
-//                                               1,
-//                                               preconditioner_constraints,
-//                                               fe.component_mask(pressure));
+      //      DoFTools::make_zero_boundary_constraints(dof_handler,
+      //                                               1,
+      //                                               preconditioner_constraints,
+      //                                               fe.component_mask(pressure));
       preconditioner_constraints.close();
     }
 
