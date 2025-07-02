@@ -291,7 +291,7 @@ namespace darcy // same namespace and in header file
     read_input_npy(input_path);
     generate_ref_input();
     generate_coordinates();
-    assemble_preconditioner();
+    assemble_approx_schur_complement();
     assemble_system();
     solve();
 

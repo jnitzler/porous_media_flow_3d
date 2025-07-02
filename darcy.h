@@ -97,7 +97,7 @@ namespace darcy
     void
     setup_grid_and_dofs();
     void
-    assemble_preconditioner();
+    assemble_approx_schur_complement();
     void
     assemble_system();
     void
@@ -175,7 +175,7 @@ namespace darcy
       const std::vector<IndexSet> &system_relevant_partitioning);
 
     void
-    setup_preconditioner(
+    setup_approx_schur_complement(
       const std::vector<IndexSet> &system_partitioning,
       const std::vector<IndexSet> &system_relevant_partitioning);
   };
