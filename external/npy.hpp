@@ -68,9 +68,9 @@ const char big_endian_char = '>';
 const char no_endian_char = '|';
 
 constexpr std::array<char, 3>
-endian_chars = {little_endian_char, big_endian_char, no_endian_char};
+endian_chars = {{little_endian_char, big_endian_char, no_endian_char}};
 constexpr std::array<char, 4>
-numtype_chars = {'f', 'i', 'u', 'c'};
+numtype_chars = {{'f', 'i', 'u', 'c'}};
 
 constexpr char host_endian_char = (big_endian ?
                                    big_endian_char :

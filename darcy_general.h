@@ -44,13 +44,14 @@ namespace darcy
 
   // ------ class constructor ----------------
   template <int dim>
-  Darcy<dim>::Darcy(const unsigned int degree)
-    : degree(degree)
+  Darcy<dim>::Darcy(const unsigned int degree_p)
+    : degree_p(degree_p)
+    , degree_u(degree_p + 1)
     , triangulation(MPI_COMM_WORLD,
                     typename Triangulation<dim>::MeshSmoothing(
                       Triangulation<dim>::smoothing_on_refinement |
                       Triangulation<dim>::smoothing_on_coarsening))
-    , fe(FE_Q<dim>(degree + 1), dim, FE_Q<dim>(degree), 1)
+    , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
     , rf_fe_system(FE_Q<dim>(1), 1)
     , rf_dof_handler(triangulation)
@@ -83,7 +84,7 @@ namespace darcy
     pcout << "Number of input field dofs: " << x_std_vec.size() << std::endl;
     for (unsigned int i = 0; i < n_dofs_rf; ++i)
       {
-        x_vec[i] = x_std_vec[i];
+        // x_vec[i] = x_std_vec[i]; TODO
       }
     pcout << "Random field successfully read in." << std::endl;
   }
@@ -104,7 +105,7 @@ namespace darcy
 
   template <int dim>
   double
-  PressureBoundaryValues<dim>::value(const Point<dim> &p,
+  PressureBoundaryValues<dim>::value(const Point<dim> &,
                                      const unsigned int /*component*/) const
   {
     return 0.0;
@@ -137,27 +138,34 @@ namespace darcy
   // ------------- assemble preconditioner ---------
   template <int dim>
   void
-  Darcy<dim>::assemble_preconditioner()
+  Darcy<dim>::assemble_approx_schur_complement()
   {
     TimerOutput::Scope timer_section(computing_timer,
                                      "   Assemble preconditioner");
     pcout << "Assemble preconditioner..." << std::endl;
     precondition_matrix = 0;
-    const QGauss<dim> quadrature_formula(degree + 2);
+    const QGauss<dim>     quadrature_formula(degree_p + 1);
+    const QGauss<dim - 1> face_quadrature_formula(degree_p + 1);
 
     // start the cell loop
     FEValues<dim>      fe_values(fe,
                             quadrature_formula,
                             update_JxW_values | update_values |
                               update_quadrature_points | update_gradients);
+    FEFaceValues<dim>  fe_face_values(fe,
+                                     face_quadrature_formula,
+                                     update_values | update_gradients |
+                                       update_normal_vectors |
+                                       update_quadrature_points |
+                                       update_JxW_values);
     FEValues<dim>      fe_rf_values(rf_fe_system,
                                quadrature_formula,
                                update_values | update_quadrature_points);
-    const unsigned int dofs_per_cell = fe.n_dofs_per_cell();
-    const unsigned int n_q_points    = fe_values.n_quadrature_points;
+    const unsigned int dofs_per_cell   = fe.n_dofs_per_cell();
+    const unsigned int n_q_points      = fe_values.n_quadrature_points;
+    const unsigned int n_face_q_points = fe_face_values.n_quadrature_points;
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
-    double             JxW_q;
 
     for (const auto &cell_tria : triangulation.active_cell_iterators())
       {
@@ -191,7 +199,7 @@ namespace darcy
                 RandomMedium::get_k_mat(rf_values[q], K_mat);
 
                 // evaluate fe values on all dofs first
-                JxW_q = fe_values.JxW(q);
+                const auto                  JxW_q = fe_values.JxW(q);
                 std::vector<Tensor<1, dim>> grad_phi_p(dofs_per_cell);
                 for (unsigned int k = 0; k < dofs_per_cell; ++k)
                   {
@@ -219,6 +227,50 @@ namespace darcy
                   local_matrix(i, j) = local_matrix(j, i);
                 }
 
+            for (const auto &face : cell->face_iterators())
+              {
+                if (face->at_boundary() && face->boundary_id() == 1)
+                  {
+                    fe_face_values.reinit(cell, face);
+
+                    // (k+1)^2 / h
+                    const auto tau = 5. *
+                                     Utilities::fixed_power<2>(degree_p + 1) /
+                                     cell->diameter();
+
+                    for (unsigned int q = 0; q < n_face_q_points; ++q)
+                      {
+                        const auto normal = fe_face_values.normal_vector(q);
+
+                        // loop over face dofs i
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          {
+                            const double phi_i_p =
+                              fe_face_values[pressure].value(i, q);
+
+                            const auto grad_phi_i_p =
+                              fe_face_values[pressure].gradient(i, q);
+
+                            // loop over other face dofs j
+                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                              {
+                                const double phi_j_p =
+                                  fe_face_values[pressure].value(j, q);
+
+                                const auto grad_phi_j_p =
+                                  fe_face_values[pressure].gradient(j, q);
+
+                                local_matrix(i, j) +=
+                                  (-grad_phi_i_p * normal * phi_j_p -
+                                   (phi_i_p *
+                                    (grad_phi_j_p * normal - tau * phi_j_p))) *
+                                  fe_face_values.JxW(q);
+                              } // end inner dof loop j
+                          } // end face dof loops i
+                      } // end quadrature loop for faces
+                  } // end if statement
+              } // end face loop
+
             preconditioner_constraints.distribute_local_to_global(
               local_matrix, local_dof_indices, precondition_matrix);
 
@@ -241,8 +293,8 @@ namespace darcy
     system_matrix = 0;
     system_rhs    = 0;
 
-    const QGauss<dim>     quadrature_formula(degree + 2);
-    const QGauss<dim - 1> face_quadrature_formula(degree + 2);
+    const QGauss<dim>     quadrature_formula(degree_u + 1);
+    const QGauss<dim - 1> face_quadrature_formula(degree_u + 1);
     FEValues<dim>         fe_values(fe,
                             quadrature_formula,
                             update_values | update_quadrature_points |
@@ -265,7 +317,6 @@ namespace darcy
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
     Vector<double>     local_rhs(dofs_per_cell);
-    double             JxW_q;
 
     // start the cell loop
     for (const auto &cell_tria : triangulation.active_cell_iterators())
@@ -461,10 +512,20 @@ namespace darcy
     Table<2, DoFTools::Coupling> coupling(dim + 1, dim + 1);
     for (unsigned int c = 0; c < dim + 1; ++c)
       for (unsigned int d = 0; d < dim + 1; ++d)
-        if (!((c == dim) && (d == dim)))
-          coupling[c][d] = DoFTools::always;
-        else
+        if (((c == dim) && (d == dim)))
           coupling[c][d] = DoFTools::none;
+        else
+          {
+            if (c < dim && d < dim)
+              {
+                if (c == d)
+                  coupling[c][d] = DoFTools::always;
+                else
+                  coupling[c][d] = DoFTools::none;
+              }
+            else
+              coupling[c][d] = DoFTools::always;
+          }
 
     DoFTools::make_sparsity_pattern(dof_handler,
                                     coupling,
@@ -485,7 +546,7 @@ namespace darcy
   // ---------- setup preconditioner ------------------------
   template <int dim>
   void
-  Darcy<dim>::setup_preconditioner(
+  Darcy<dim>::setup_approx_schur_complement(
     const std::vector<IndexSet> &partitioning,
     const std::vector<IndexSet> &relevant_partitioning)
   {
@@ -497,8 +558,8 @@ namespace darcy
                                               MPI_COMM_WORLD);
 
     Table<2, DoFTools::Coupling> coupling_precond(dim + 1, dim + 1);
-    for (unsigned int c = 0; c < dim + 1; ++c)
-      for (unsigned int d = 0; d < dim + 1; ++d)
+    for (unsigned int c = dim; c < dim + 1; ++c)
+      for (unsigned int d = dim; d < dim + 1; ++d)
         if (c == d)
           coupling_precond[c][d] = DoFTools::always;
         else
@@ -600,14 +661,11 @@ namespace darcy
       DoFTools::make_hanging_node_constraints(dof_handler,
                                               preconditioner_constraints);
 
-      DoFTools::make_zero_boundary_constraints(dof_handler,
-                                               preconditioner_constraints,
-                                               fe.component_mask(pressure));
       preconditioner_constraints.close();
     }
 
     setup_system_matrix(partitioning, relevant_partitioning);
-    setup_preconditioner(partitioning, relevant_partitioning);
+    setup_approx_schur_complement(partitioning, relevant_partitioning);
 
     solution.reinit(partitioning, MPI_COMM_WORLD);
     solution_primary_problem.reinit(partitioning, MPI_COMM_WORLD);
@@ -648,7 +706,7 @@ namespace darcy
     // -----------------------
     const Preconditioner::BlockSchurPreconditioner<decltype(op_S_inv),
                                                    decltype(ap_M_inv)>
-      block_preconditioner(system_matrix, op_S_inv, ap_M_inv);
+      block_preconditioner(system_matrix, op_S_inv, ap_M_inv, computing_timer);
     pcout << "Block preconditioner for the system matrix created." << std::endl;
 
     // ------------------ construct the final inverse operator for the system
@@ -684,12 +742,18 @@ namespace darcy
         distributed_solution(i) = 0;
 
     pcout << "Starting iterative solver..." << std::endl;
-    solver_system.solve(system_matrix,
-                        distributed_solution,
-                        system_rhs,
-                        block_preconditioner);
+    {
+      TimerOutput::Scope timer_section(computing_timer, "   Solve gmres");
+      solver_system.solve(system_matrix,
+                          distributed_solution,
+                          system_rhs,
+                          block_preconditioner);
+    }
     constraints.distribute(distributed_solution);
     solution = distributed_solution;
+
+    pcout << solver_control_system.final_reduction()
+          << " GMRES reduction to obtain convergence." << std::endl;
 
     pcout << solver_control_system.last_step()
           << " GMRES iterations to obtain convergence." << std::endl;

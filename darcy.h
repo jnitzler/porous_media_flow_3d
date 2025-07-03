@@ -78,7 +78,7 @@ namespace darcy
   class Darcy
   {
   public:
-    explicit Darcy(const unsigned int degree);
+    explicit Darcy(const unsigned int degree_p);
     void
     run(const std::string &input_path, const std::string &output_path);
 
@@ -97,7 +97,7 @@ namespace darcy
     void
     setup_grid_and_dofs();
     void
-    assemble_preconditioner();
+    assemble_approx_schur_complement();
     void
     assemble_system();
     void
@@ -123,7 +123,8 @@ namespace darcy
     void
     final_inner_adjoint_product();
 
-    const unsigned int degree;
+    const unsigned int degree_p;
+    const unsigned int degree_u;
 
     // Triangulation<dim> triangulation;
     parallel::distributed::Triangulation<dim> triangulation;
@@ -175,7 +176,7 @@ namespace darcy
       const std::vector<IndexSet> &system_relevant_partitioning);
 
     void
-    setup_preconditioner(
+    setup_approx_schur_complement(
       const std::vector<IndexSet> &system_partitioning,
       const std::vector<IndexSet> &system_relevant_partitioning);
   };
