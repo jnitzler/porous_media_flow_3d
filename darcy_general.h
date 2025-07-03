@@ -144,8 +144,8 @@ namespace darcy
                                      "   Assemble preconditioner");
     pcout << "Assemble preconditioner..." << std::endl;
     precondition_matrix = 0;
-    const QGauss<dim>     quadrature_formula(degree_p + 2);
-    const QGauss<dim - 1> face_quadrature_formula(degree_p + 2);
+    const QGauss<dim>     quadrature_formula(degree_p + 1);
+    const QGauss<dim - 1> face_quadrature_formula(degree_p + 1);
 
     // start the cell loop
     FEValues<dim>      fe_values(fe,
@@ -291,8 +291,8 @@ namespace darcy
     system_matrix = 0;
     system_rhs    = 0;
 
-    const QGauss<dim>     quadrature_formula(degree_p + 2);
-    const QGauss<dim - 1> face_quadrature_formula(degree_p + 2);
+    const QGauss<dim>     quadrature_formula(degree_u + 1);
+    const QGauss<dim - 1> face_quadrature_formula(degree_u + 1);
     FEValues<dim>         fe_values(fe,
                             quadrature_formula,
                             update_values | update_quadrature_points |

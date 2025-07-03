@@ -228,9 +228,7 @@ namespace darcy // same namespace and in header file
 
     // build the patches
     MappingQ<dim> mapping(1); // linear mapping
-    data_out.build_patches(mapping,
-                           degree + 1,
-                           DataOut<dim>::curved_inner_cells);
+    data_out.build_patches(mapping, degree_u, DataOut<dim>::curved_inner_cells);
 
     constexpr unsigned int num_vtu_files    = 4;
     constexpr unsigned int n_digits_counter = 2;
@@ -260,7 +258,7 @@ namespace darcy // same namespace and in header file
     data_out_rf.add_data_vector(rf_dof_handler, rf, random_field_names);
 
     data_out_rf.build_patches(mapping,
-                              degree + 1,
+                              degree_u,
                               DataOut<dim>::curved_inner_cells);
     data_out_rf.write_vtu_with_pvtu_record(stripped_path_rf,
                                            filename_rf,
