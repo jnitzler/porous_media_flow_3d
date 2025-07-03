@@ -84,7 +84,7 @@ namespace darcy
     pcout << "Number of input field dofs: " << x_std_vec.size() << std::endl;
     for (unsigned int i = 0; i < n_dofs_rf; ++i)
       {
-        x_vec[i] = x_std_vec[i];
+        // x_vec[i] = x_std_vec[i]; TODO
       }
     pcout << "Random field successfully read in." << std::endl;
   }
@@ -105,7 +105,7 @@ namespace darcy
 
   template <int dim>
   double
-  PressureBoundaryValues<dim>::value(const Point<dim> &p,
+  PressureBoundaryValues<dim>::value(const Point<dim> &,
                                      const unsigned int /*component*/) const
   {
     return 0.0;
@@ -234,7 +234,9 @@ namespace darcy
                     fe_face_values.reinit(cell, face);
 
                     // (k+1)^2 / h
-                    const auto tau = 4. * 2. * 2. / cell->diameter();
+                    const auto tau = 5. *
+                                     Utilities::fixed_power<2>(degree_p + 1) /
+                                     cell->diameter();
 
                     for (unsigned int q = 0; q < n_face_q_points; ++q)
                       {
@@ -659,10 +661,6 @@ namespace darcy
       DoFTools::make_hanging_node_constraints(dof_handler,
                                               preconditioner_constraints);
 
-      //      DoFTools::make_zero_boundary_constraints(dof_handler,
-      //                                               1,
-      //                                               preconditioner_constraints,
-      //                                               fe.component_mask(pressure));
       preconditioner_constraints.close();
     }
 
