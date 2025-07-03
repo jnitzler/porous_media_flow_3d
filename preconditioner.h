@@ -65,7 +65,7 @@ namespace Preconditioner
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,
                              const PreconditionerTypeaS &ap_S_inv,
                              const PreconditionerTypeM  &ap_M_inv,
-                             TimerOutput & computing_timer);
+                             TimerOutput                &computing_timer);
 
     void
     vmult(TrilinosWrappers::MPI::BlockVector       &dst,
@@ -75,7 +75,8 @@ namespace Preconditioner
     const TrilinosWrappers::BlockSparseMatrix &system_matrix;
     const PreconditionerTypeaS                &ap_S_inv;
     const PreconditionerTypeM                 &ap_M_inv;
-     TimerOutput & computing_timer;
+    TimerOutput                               &computing_timer;
+    mutable TrilinosWrappers::MPI::Vector      tmp;
   };
 
   // constructor
@@ -84,11 +85,13 @@ namespace Preconditioner
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,
                              const PreconditionerTypeaS &ap_S_inv,
                              const PreconditionerTypeM  &ap_M_inv,
-                             TimerOutput & computing_timer)
+                             TimerOutput                &computing_timer)
     : system_matrix(System)
     , ap_S_inv(ap_S_inv)
     , ap_M_inv(ap_M_inv)
-    ,computing_timer(computing_timer)
+    , computing_timer(computing_timer)
+    , tmp(System.block(1, 1).locally_owned_range_indices(),
+          System.get_mpi_communicator())
   {}
 
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
@@ -97,14 +100,12 @@ namespace Preconditioner
     TrilinosWrappers::MPI::BlockVector       &dst,
     const TrilinosWrappers::MPI::BlockVector &src) const
   {
-    TimerOutput::Scope timer_section(computing_timer, "   Apply preconditioner");
-    TrilinosWrappers::MPI::Vector utmp(src.block(1));
-    // tmp(complete_index_set(system_matrix.block(1, 1).m())) // there is a
-    // problem in parallel
+    TimerOutput::Scope timer_section(computing_timer,
+                                     "   Apply preconditioner");
     ap_M_inv.vmult(dst.block(0), src.block(0));
-    system_matrix.block(1, 0).residual(utmp, dst.block(0), src.block(1));
-    utmp *= -1;
-    ap_S_inv.vmult(dst.block(1), utmp);
+    system_matrix.block(1, 0).residual(tmp, dst.block(0), src.block(1));
+    tmp *= -1;
+    ap_S_inv.vmult(dst.block(1), tmp);
   }
 } // end namespace Preconditioner
 #endif
