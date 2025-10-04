@@ -83,7 +83,7 @@ namespace darcy
     pcout << "Number of input field dofs: " << x_std_vec.size() << std::endl;
     for (unsigned int i = 0; i < n_dofs_rf; ++i)
       {
-        // x_vec[i] = x_std_vec[i]; TODO
+        x_vec[i] = x_std_vec[i];
       }
     pcout << "Random field successfully read in." << std::endl;
   }
