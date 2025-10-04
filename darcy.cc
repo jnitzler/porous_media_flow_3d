@@ -227,7 +227,7 @@ namespace darcy // same namespace and in header file
     data_out.add_data_vector(subdomain, "subdomain");
 
     // build the patches
-    MappingQ<dim> mapping(1); // linear mapping
+    MappingQ<dim> mapping(2); // nonlinear mapping
     data_out.build_patches(mapping, degree_u, DataOut<dim>::curved_inner_cells);
 
     constexpr unsigned int num_vtu_files    = 4;

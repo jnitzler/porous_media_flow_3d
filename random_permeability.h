@@ -37,10 +37,22 @@ namespace darcy
     {
       (void)component;
       // get the random field values
-      double factor = 4.0;
+      double factor     = 6.0;
+      double base_value = 0.5;
+      double phase      = std::sqrt(2.0) / 3.0;
       double value;
-      value = 1.1 + std::sin(factor * point[0]) *
-                      std::cos(2 * factor * point[1]) * sin(factor * point[2]);
+      value = std::tanh(
+        (std::sin(factor * point[0] + phase) + std::cos(2 * factor * point[1]) +
+         sin(factor * point[2]) + std::cos(1.5 * factor * point[2] + phase) +
+         sin(factor * point[2] - phase)) *
+        (point[1] * point[2] - 1.0));
+
+      // add inclusion
+      if (point[0] > -0.25 && point[0] < 0.25 && point[1] > -0.25 &&
+          point[1] < 0.25 && point[2] > -0.9 && point[2] < -0.5)
+        {
+          value = base_value;
+        }
       return value;
     }
 
