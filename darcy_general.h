@@ -16,7 +16,6 @@ namespace darcy
     const RandomMedium::RefScalar<dim> ref_scalar;
     x_vec.reinit(rf_dof_handler.n_dofs());
     VectorTools::interpolate(rf_dof_handler, ref_scalar, x_vec);
-    x_vec = 1.0;
   }
 
   // generate coordinates at which observations are present
@@ -53,7 +52,7 @@ namespace darcy
                       Triangulation<dim>::smoothing_on_coarsening))
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
-    , rf_fe_system(FE_Q<dim>(1), 1)
+    , rf_fe_system(FE_Q<dim>(2), 1)
     , rf_dof_handler(triangulation)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
@@ -135,14 +134,14 @@ namespace darcy
   }
 
 
-  // ------------- assemble preconditioner ---------
+  // ------------- assemble approx Schur complement ---------
   template <int dim>
   void
   Darcy<dim>::assemble_approx_schur_complement()
   {
     TimerOutput::Scope timer_section(computing_timer,
-                                     "   Assemble preconditioner");
-    pcout << "Assemble preconditioner..." << std::endl;
+                                     "   Assemble approx. Schur compl.");
+    pcout << "Assemble approx. Schur complement..." << std::endl;
     precondition_matrix = 0;
     const QGauss<dim>     quadrature_formula(degree_p + 1);
     const QGauss<dim - 1> face_quadrature_formula(degree_p + 1);
@@ -543,7 +542,7 @@ namespace darcy
            // this should be moved to a separate function in the future
   }
 
-  // ---------- setup preconditioner ------------------------
+  // ---------- setup approx schur complement ------------------------
   template <int dim>
   void
   Darcy<dim>::setup_approx_schur_complement(
