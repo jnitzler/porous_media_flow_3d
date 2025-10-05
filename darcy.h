@@ -128,9 +128,13 @@ namespace darcy
 
     parallel::distributed::Triangulation<dim> triangulation; // for problem
     parallel::distributed::Triangulation<dim>
-                    triangulation_obs; // for observations
+                    triangulation_obs; // for observation points
     FESystem<dim>   fe;
     DoFHandler<dim> dof_handler;
+
+    // systems for results at observation points
+    FESystem<dim>   fe_obs;
+    DoFHandler<dim> dof_handler_obs;
 
     // random field setup
     FESystem<dim>   rf_fe_system;

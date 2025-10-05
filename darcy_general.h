@@ -58,6 +58,9 @@ namespace darcy
     , dof_handler(triangulation)
     , rf_fe_system(FE_Q<dim>(2), 1)
     , rf_dof_handler(triangulation)
+    // for velocity and rf at observation points
+    , fe_obs(FE_Q<dim>(degree_u), dim, FE_Q<dim>(2), 1)
+    , dof_handler_obs(triangulation_obs)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
                       pcout,
@@ -604,8 +607,20 @@ namespace darcy
                                          outer_radius,
                                          n_cells);
 
+    // introduce coarse tria/grid for artificial observations only
+    triangulation_obs.copy_triangulation(triangulation);
+    triangulation_obs.refine_global(3);
+    dof_handler_obs.distribute_dofs(fe_obs);
+    DoFRenumbering::Cuthill_McKee(
+      rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
+
+
+    // now the actual grid for the forward problem
     triangulation.refine_global(4);
     dof_handler.distribute_dofs(fe);
+    DoFRenumbering::Cuthill_McKee(
+      rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
+
 
     // generate grid and distribute dofs for random field
     rf_dof_handler.distribute_dofs(rf_fe_system);
