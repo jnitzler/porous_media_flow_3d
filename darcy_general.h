@@ -612,7 +612,7 @@ namespace darcy
     triangulation_obs.refine_global(3);
     dof_handler_obs.distribute_dofs(fe_obs);
     DoFRenumbering::Cuthill_McKee(
-      rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
+      dof_handler_obs); // Cuthill_McKee, component_wise to be more efficient
 
 
     // now the actual grid for the forward problem
