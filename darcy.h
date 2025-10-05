@@ -126,10 +126,11 @@ namespace darcy
     const unsigned int degree_p;
     const unsigned int degree_u;
 
-    // Triangulation<dim> triangulation;
-    parallel::distributed::Triangulation<dim> triangulation;
-    FESystem<dim>                             fe;
-    DoFHandler<dim>                           dof_handler;
+    parallel::distributed::Triangulation<dim> triangulation; // for problem
+    parallel::distributed::Triangulation<dim>
+                    triangulation_obs; // for observations
+    FESystem<dim>   fe;
+    DoFHandler<dim> dof_handler;
 
     // random field setup
     FESystem<dim>   rf_fe_system;

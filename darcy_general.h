@@ -50,6 +50,10 @@ namespace darcy
                     typename Triangulation<dim>::MeshSmoothing(
                       Triangulation<dim>::smoothing_on_refinement |
                       Triangulation<dim>::smoothing_on_coarsening))
+    , triangulation_obs(MPI_COMM_WORLD,
+                        typename Triangulation<dim>::MeshSmoothing(
+                          Triangulation<dim>::smoothing_on_refinement |
+                          Triangulation<dim>::smoothing_on_coarsening))
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
     , rf_fe_system(FE_Q<dim>(2), 1)
