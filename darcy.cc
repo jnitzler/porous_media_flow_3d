@@ -12,6 +12,9 @@ namespace darcy // same namespace and in header file
   Darcy<dim>::output_velocity_at_observation_points_npy(
     const std::string &output_path)
   {
+    TimerOutput::Scope timer_section(computing_timer,
+                                     "   Remote point evaluation");
+
     // collect data of interest to write out in output_data
     // set up a dummy mapping
     MappingQ<dim> dummy_mapping(1);

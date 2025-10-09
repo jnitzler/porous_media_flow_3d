@@ -23,21 +23,27 @@ namespace darcy
   void
   Darcy<dim>::generate_coordinates()
   {
-    // ------ generate coordinates ----------------//
-    const unsigned int n_points = 20;
-    const double       h        = 1.0 / (n_points - 1);
-    Point<dim>         p;
-    spatial_coordinates.resize(Utilities::fixed_power<dim>(n_points));
-
-    for (unsigned int idx = 0; idx < spatial_coordinates.size(); ++idx)
+    //    // ------ generate coordinates ----------------//
+    //    const unsigned int n_points = 20;
+    //    const double       h        = 1.0 / (n_points - 1);
+    //    Point<dim>         p;
+    //    spatial_coordinates.resize(Utilities::fixed_power<dim>(n_points));
+    //
+    //    for (unsigned int idx = 0; idx < spatial_coordinates.size(); ++idx)
+    //      {
+    //        unsigned int tempIdx = idx;
+    //        for (int d = 0; d < dim; ++d)
+    //          {
+    //            p[d] = (tempIdx % n_points) * h;
+    //            tempIdx /= n_points;
+    //          }
+    //        spatial_coordinates[idx] = p;
+    //      }
+    spatial_coordinates.resize(triangulation_obs.n_vertices());
+    for (const auto &c : triangulation_obs.active_cell_iterators())
       {
-        unsigned int tempIdx = idx;
-        for (int d = 0; d < dim; ++d)
-          {
-            p[d] = (tempIdx % n_points) * h;
-            tempIdx /= n_points;
-          }
-        spatial_coordinates[idx] = p;
+        for (unsigned int v = 0; v < c->n_vertices(); ++v)
+          spatial_coordinates[c->vertex_index(v)] = c->vertex(v);
       }
   }
 
@@ -58,9 +64,6 @@ namespace darcy
     , dof_handler(triangulation)
     , rf_fe_system(FE_Q<dim>(2), 1)
     , rf_dof_handler(triangulation)
-    // for velocity and rf at observation points
-    , fe_obs(FE_Q<dim>(degree_u), dim, FE_Q<dim>(2), 1)
-    , dof_handler_obs(triangulation_obs)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
                       pcout,
@@ -608,29 +611,26 @@ namespace darcy
                                          n_cells);
 
     // introduce coarse tria/grid for artificial observations only
-    triangulation_obs.copy_triangulation(triangulation);
+    GridGenerator::eccentric_hyper_shell(triangulation_obs,
+                                         inner_center,
+                                         outer_center,
+                                         inner_radius,
+                                         outer_radius,
+                                         n_cells);
     triangulation_obs.refine_global(3);
-    dof_handler_obs.distribute_dofs(fe_obs);
-    DoFRenumbering::Cuthill_McKee(
-      dof_handler_obs); // Cuthill_McKee, component_wise to be more efficient
-
 
     // now the actual grid for the forward problem
     triangulation.refine_global(4);
     dof_handler.distribute_dofs(fe);
     DoFRenumbering::Cuthill_McKee(
-      rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
-
+      dof_handler); // Cuthill_McKee, component_wise to be more efficient
+    DoFRenumbering::component_wise(dof_handler, block_component);
 
     // generate grid and distribute dofs for random field
     rf_dof_handler.distribute_dofs(rf_fe_system);
     DoFRenumbering::Cuthill_McKee(
       rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
 
-    // component wise renumbering
-    DoFRenumbering::Cuthill_McKee(
-      dof_handler); // Cuthill_McKee, component_wise to be more efficient
-    DoFRenumbering::component_wise(dof_handler, block_component);
 
     // count dofs per block
     const std::vector<types::global_dof_index> dofs_per_block =
