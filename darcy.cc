@@ -12,6 +12,9 @@ namespace darcy // same namespace and in header file
   Darcy<dim>::output_velocity_at_observation_points_npy(
     const std::string &output_path)
   {
+    TimerOutput::Scope timer_section(computing_timer,
+                                     "   Remote point evaluation");
+
     // collect data of interest to write out in output_data
     // set up a dummy mapping
     MappingQ<dim> dummy_mapping(1);
@@ -50,42 +53,6 @@ namespace darcy // same namespace and in header file
       }
   }
 
-  //// --------- output field at observation points to numpy array
-  ///---------------- / --- below: pressure feature
-  // template <int dim>
-  // void Darcy<dim>::output_field_at_observation_points_npy(
-  //     const std::string &output_path) {
-  //   // collect data of interest to write out in output_data
-  //
-  //   // get the solution values at the points of interest for time step
-  //   solution_distributed = solution;
-  //
-  //   // vector for the gradients
-  //   std::vector<Tensor<1, dim>>
-  //   gradients_at_points(spatial_coordinates.size());
-  //
-  //   // loop over the points of interest
-  //   for (unsigned int i = 0; i < spatial_coordinates.size(); ++i) {
-  //     // get the gradient at the point of interest
-  //     gradients_at_points[i] = VectorTools::point_gradient<dim>(
-  //         dof_handler, solution_distributed, spatial_coordinates[i]);
-  //   }
-  //
-  //   // append them to the data vector
-  //   std::vector<double> pressure_grad_x;
-  //
-  //   // loop over experimental data point locations and their values
-  //   // NOTE: this has to match with what is expected in QUEENS
-  //     for (const auto &entry : gradients_at_points) {
-  //       pressure_grad_x.push_back(entry[4]);
-  //     }
-  //
-  //   if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0) {
-  //     const std::string filename = output_path + "_features.npy";
-  //     const unsigned int num_data = pressure_grad_x.size();
-  //     write_data_to_npy(filename, pressure_grad_x, num_data, 1);
-  //   }
-  // }
 
   // --------- output field at observation points to numpy array
   // ----------------
@@ -296,8 +263,8 @@ namespace darcy // same namespace and in header file
     // output the results
     output_pvtu(output_path);
     output_full_velocity_npy(output_path);
-    // output_velocity_at_observation_points_npy(output_path);
-    //  output_field_at_observation_points_npy(output_path);
+    output_velocity_at_observation_points_npy(output_path);
+    output_field_at_observation_points_npy(output_path);
 
   } // end run simulation
 

@@ -11,22 +11,6 @@
 #include <deal.II/base/tensor_function.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/base/work_stream.h>
-#include <deal.II/lac/block_vector.h>
-// #include <deal.II/lac/block_sparse_matrix.h>
-#include <deal.II/lac/affine_constraints.h>
-#include <deal.II/lac/block_sparsity_pattern.h>
-#include <deal.II/lac/full_matrix.h>
-#include <deal.II/lac/solver_cg.h>
-#include <deal.II/lac/solver_gmres.h>
-// #include <deal.II/lac/precondition.h>
-// #include <deal.II/lac/sparse_ilu.h>
-
-// The only two new header files that deserve some attention are those for
-// the LinearOperator and PackagedOperation classes:
-// #include <deal.II/lac/linear_operator.h>
-// #include <deal.II/lac/block_linear_operator.h>
-// #include <deal.II/lac/packaged_operation.h>
-
 #include <deal.II/distributed/grid_refinement.h>
 #include <deal.II/distributed/solution_transfer.h>
 #include <deal.II/distributed/tria.h>
@@ -34,14 +18,19 @@
 #include <deal.II/dofs/dof_renumbering.h>
 #include <deal.II/dofs/dof_tools.h>
 #include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_system.h>
+#include <deal.II/fe/fe_values.h>
 #include <deal.II/grid/filtered_iterator.h>
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/grid_refinement.h>
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/grid/tria.h>
-// #include <deal.II/fe/fe_dgq.h>
-#include <deal.II/fe/fe_system.h>
-#include <deal.II/fe/fe_values.h>
+#include <deal.II/lac/affine_constraints.h>
+#include <deal.II/lac/block_sparsity_pattern.h>
+#include <deal.II/lac/block_vector.h>
+#include <deal.II/lac/full_matrix.h>
+#include <deal.II/lac/solver_cg.h>
+#include <deal.II/lac/solver_gmres.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/vector_tools.h>
@@ -126,10 +115,12 @@ namespace darcy
     const unsigned int degree_p;
     const unsigned int degree_u;
 
-    // Triangulation<dim> triangulation;
-    parallel::distributed::Triangulation<dim> triangulation;
-    FESystem<dim>                             fe;
-    DoFHandler<dim>                           dof_handler;
+    parallel::distributed::Triangulation<dim> triangulation; // for problem
+    parallel::distributed::Triangulation<dim>
+                    triangulation_obs; // for observation points
+    FESystem<dim>   fe;
+    DoFHandler<dim> dof_handler;
+
 
     // random field setup
     FESystem<dim>   rf_fe_system;

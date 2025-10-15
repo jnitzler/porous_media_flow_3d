@@ -22,4 +22,4 @@ function(setup_executable target)
 endfunction()
 
 setup_executable("darcy")
-setup_executable("darcy_adjoint")
+#setup_executable("darcy_adjoint")
