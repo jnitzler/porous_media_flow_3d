@@ -1,3 +1,5 @@
+#include <deal.II/numerics/matrix_tools.h>
+
 #include "darcy.h"
 #include "darcy_general.h"
 
@@ -189,6 +191,74 @@ namespace darcy
     pcout << std::endl;
   }
 
+  // ---------------------- create rf laplace operator -------------------------
+  template <int dim>
+  void
+  Darcy<dim>::create_rf_laplace_operator()
+  {
+    TimerOutput::Scope timing_section(computing_timer,
+                                      "Create rf laplace operator");
+    pcout << "Creating random field laplace operator..." << std::endl;
+
+    //  index sets
+    const IndexSet locally_owned = rf_dof_handler.locally_owned_dofs();
+    IndexSet       locally_relevant;
+    DoFTools::extract_locally_relevant_dofs(rf_dof_handler, locally_relevant);
+
+    // constraints
+    AffineConstraints<double> rf_constraints;
+    rf_constraints.clear();
+    DoFTools::make_hanging_node_constraints(rf_dof_handler, rf_constraints);
+    rf_constraints.close();
+
+    // Trilinos sparsity pattern
+    TrilinosWrappers::SparsityPattern sp_rf(locally_owned,
+                                            locally_owned,
+                                            locally_relevant,
+                                            MPI_COMM_WORLD);
+
+    DoFTools::make_sparsity_pattern(rf_dof_handler,
+                                    sp_rf,
+                                    rf_constraints,
+                                    false,
+                                    Utilities::MPI::this_mpi_process(
+                                      MPI_COMM_WORLD));
+    sp_rf.compress();
+
+    // initialize the matrix
+    rf_laplace_matrix.reinit(sp_rf);
+
+    // set the mean vector to zero
+    mean_rf.reinit(locally_owned, locally_relevant, MPI_COMM_WORLD);
+
+    // quadrature
+    const QGauss<dim> quadrature(degree_u + 1); // fine quadrature
+
+    // setup laplace matrix
+    // Tell the template exactly which Function type we mean (coefficient == 1)
+    const dealii::Function<dim, double> *coefficient = nullptr;
+    MatrixCreator::create_laplace_matrix(rf_dof_handler,
+                                         quadrature,
+                                         rf_laplace_matrix,
+                                         coefficient,
+                                         rf_constraints);
+  }
+
+  // ---------------------- add prior gradient to adjoint ----------------------
+  template <int dim>
+  void
+  Darcy<dim>::add_prior_gradient_to_adjoint()
+  {
+    // define random field mean vector
+
+
+    // calculate Q matrix
+
+    // calculate prior gradient
+
+    // add prior gradient to adjoint gradient
+  }
+
   // ---------------------- run simulation adjoint ----------------------------
   template <int dim>
   void
@@ -197,15 +267,16 @@ namespace darcy
   {
     setup_grid_and_dofs();
     read_input_npy(input_path);
-    // generate_ref_input();
     read_primary_solution(output_path); // this needs the dof handler hence
                                         // after setup_grid_and_dofs
     assemble_approx_schur_complement();
-    assemble_system(); // TODO we assemble a wrong rhs for the adjoint first and
+    assemble_system(); // we assemble a wrong rhs for the adjoint first and
                        // then overwrite it...
     overwrite_adjoint_rhs();
     solve();
     final_inner_adjoint_product();
+    create_rf_laplace_operator();
+    add_prior_gradient_to_adjoint();
 
     // --- write out the gradient with processor 0
     unsigned int rows    = grad_log_lik_x.size();
@@ -361,10 +432,9 @@ main(int argc, char *argv[])
   try
     {
       using namespace darcy;
-      Utilities::MPI::MPI_InitFinalize mpi_initialization(
-        argc, argv, 1); // numbers::invalid_unsigned_int);
-      const unsigned int fe_degree = 1;
-      Darcy<3>           mixed_laplace_problem(fe_degree);
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
+      const unsigned int               fe_degree = 1;
+      Darcy<3>                         mixed_laplace_problem(fe_degree);
       mixed_laplace_problem.run(input_file_path, output_file_path);
     }
   catch (std::exception &exc)

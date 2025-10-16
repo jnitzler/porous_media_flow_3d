@@ -111,6 +111,10 @@ namespace darcy
     overwrite_adjoint_rhs();
     void
     final_inner_adjoint_product();
+    void
+    create_rf_laplace_operator();
+    void
+    add_prior_gradient_to_adjoint();
 
     const unsigned int degree_p;
     const unsigned int degree_u;
@@ -160,6 +164,10 @@ namespace darcy
       solution_primary_problem; // distributed solution vector of the primary
                                 // problem
     TrilinosWrappers::MPI::BlockVector solution_primary_distributed;
+
+    TrilinosWrappers::MPI::Vector  mean_rf; // mean of the random field
+    TrilinosWrappers::SparseMatrix rf_laplace_matrix; // laplace matrix for the
+                                                      // random field
 
     void
     setup_system_matrix(
