@@ -200,7 +200,7 @@ namespace darcy
     // generate_ref_input();
     read_primary_solution(output_path); // this needs the dof handler hence
                                         // after setup_grid_and_dofs
-    assemble_preconditioner();
+    assemble_approx_schur_complement();
     assemble_system(); // TODO we assemble a wrong rhs for the adjoint first and
                        // then overwrite it...
     overwrite_adjoint_rhs();
@@ -237,7 +237,7 @@ namespace darcy
 
     // quadrature formula, fe values and dofs
     // standard gauss quadrature
-    const QGauss<dim>  quadrature(degree +
+    const QGauss<dim>  quadrature(degree_u +
                                  2); // we choose a coarser quadrature here
     FEValues<dim>      fe_values(fe,
                             quadrature,
