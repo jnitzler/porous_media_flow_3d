@@ -73,12 +73,6 @@ namespace darcy // same namespace and in header file
     // get the solution values at the points of interest for time step
     solution_distributed = solution;
 
-    //  const auto full_data_array = VectorTools::point_values<dim>(
-    //      remote_eval_obj, dof_handler, solution_distributed);
-    //
-    //  // append them to the data vector
-    //  std::vector<double> l_output_data(full_data_array.size());
-
     // Step 1: Create a coarser mesh
     parallel::distributed::Triangulation<dim> coarse_tria(
       triangulation.get_communicator());
@@ -129,36 +123,45 @@ namespace darcy // same namespace and in header file
   void
   Darcy<dim>::output_full_velocity_npy(const std::string &output_path)
   {
-    // copy solution to std vector
-    std::vector<double> std_solution(dof_handler.n_dofs());
+    std::vector<double> full_solution;
+    solution_distributed = solution;
+
+    // only resize full solution vector on rank 0 to save memory
+    if (dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      {
+        full_solution.resize(dof_handler.n_dofs(), 0.0);
+      }
+
+    auto custom_fuse = [&](const double &x, const double &y) { return x + y; };
 
     for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
       {
-        if (solution.in_local_range(i))
+        double temp;
+        temp =
+          dealii::Utilities::MPI::reduce<double>(solution.in_local_range(i) ?
+                                                   solution[i] :
+                                                   0.0,
+                                                 MPI_COMM_WORLD,
+                                                 custom_fuse,
+                                                 0);
+
+        if (dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
           {
-            std_solution[i] = solution[i];
+            full_solution[i] = temp;
           }
       }
-
-    // gather the distributed solution to std_solution vector on process 0
-    std::vector<std::vector<double>> gathered_solution;
-    gathered_solution = Utilities::MPI::gather(MPI_COMM_WORLD, std_solution, 0);
 
     // write the gathered solution that exists on rank 0 to one file
-    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+    if (dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        std::vector<double> full_solution;
-        // Calculate the total size of the full solution
-        for (const auto &vec : gathered_solution)
-          {
-            full_solution.insert(full_solution.end(), vec.begin(), vec.end());
-          }
-        std::string filename = output_path + "_solution_full.npy";
+        std::string file_path = output_path + "_solution_full.npy";
+        pcout << "Writing full solution to file: " << file_path << std::endl;
+        pcout << "Size of full solution: " << full_solution.size() << std::endl;
+        pcout << "Number of dofs: " << dof_handler.n_dofs() << std::endl;
         // Assuming write_data_to_npy correctly writes the data in NumPy format
-        write_data_to_npy(filename, full_solution, full_solution.size(), 1);
-      }
-
-  } // end output_npy
+        write_data_to_npy(file_path, full_solution, full_solution.size(), 1);
+      } // end output_npy
+  }
 
   // ----------------- output pvtu -----------------
   template <int dim>
@@ -254,7 +257,7 @@ namespace darcy // same namespace and in header file
   {
     setup_grid_and_dofs();
     read_input_npy(input_path);
-    generate_ref_input();
+    generate_ref_input(); // TODO: should be removed in production
     generate_coordinates();
     assemble_approx_schur_complement();
     assemble_system();

@@ -6,3 +6,10 @@ output/
 
 # ignore tests directory
 tests/
+
+# for now ignore input directory
+input/
+
+# ignore Visual Studio Code settings
+.vscode
+

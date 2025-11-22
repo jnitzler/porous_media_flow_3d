@@ -41,7 +41,7 @@ namespace darcy
     data_vec.resize(spatial_coordinates.size(), std::vector<double>(dim));
     for (auto &spatial_coordinate : spatial_coordinates)
       {
-        std::vector<double> data_coord(2 * dim);
+        std::vector<double> data_coord(dim * dim); // data_coord(2 * dim);
         for (unsigned int i = 0; i < dim; ++i)
           {
             data_coord[i] = adjoint_data_vec[i * num_data + k];
@@ -49,6 +49,8 @@ namespace darcy
         data_vec[k] = data_coord;
         ++k;
       }
+    pcout << "Successfully read adjoint data!" << std::endl;
+    pcout << "Number of adjoint data points: " << data_vec.size() << std::endl;
   }
 
   // ---------------------- read primary solution npy --------------------------
@@ -180,8 +182,6 @@ namespace darcy
   void
   Darcy<dim>::run(const std::string &input_path, const std::string &output_path)
   {
-    generate_coordinates();
-    read_upstream_gradient_npy(input_path);
     run_simulation(input_path, output_path);
 
     pcout << "Adjoint problem solved successfully!" << std::endl;
@@ -228,8 +228,9 @@ namespace darcy
     // initialize the matrix
     rf_laplace_matrix.reinit(sp_rf);
 
-    // set the mean vector to zero
-    mean_rf.reinit(locally_owned, locally_relevant, MPI_COMM_WORLD);
+    // initialize mean vector
+    mean_rf.reinit(locally_owned, MPI_COMM_WORLD);
+
 
     // quadrature
     const QGauss<dim> quadrature(degree_u + 1); // fine quadrature
@@ -250,13 +251,52 @@ namespace darcy
   Darcy<dim>::add_prior_gradient_to_adjoint()
   {
     // define random field mean vector
+    // TODO: adjust mean to BCs
+
+    // apply constraints to laplace matrix and make negative
+    // TODO: Dirichlet BCs
+
+    // define a
+    const double a = 1e-9 + x_vec.size() / 2.0;
+
+    // initialize vectors
+    const IndexSet               &owned = rf_dof_handler.locally_owned_dofs();
+    TrilinosWrappers::MPI::Vector x_minus_mean, prior_grad;
+    x_minus_mean.reinit(owned, MPI_COMM_WORLD);
+    prior_grad.reinit(owned, MPI_COMM_WORLD);
+
+    // Fill x_minus_mean from serial x_vec at owned indices
+    for (const auto idx : owned)
+      x_minus_mean[idx] = x_vec[idx];
+    // x_minus_mean.compress(VectorOperation::insert);
+
+    // Subtract mean directly (mean_rf is already a distributed owned-only
+    // vector)
+    x_minus_mean.add(-1.0, mean_rf); // x_minus_mean = x_vec - mean_rf
 
 
-    // calculate Q matrix
+    // b = ||x_vec - mean||^2 + 1e-9
+    // double b = x_minus_mean.dot(x_minus_mean) + 1e-9;
+    const double nrm_sqr = x_minus_mean.norm_sqr(); // global MPI norm
+    const double b       = nrm_sqr + 1e-9;
 
-    // calculate prior gradient
+    // prior_grad = (-b/a) * (L * (x_vec - mean))
+    rf_laplace_matrix.vmult(prior_grad, x_minus_mean);
+    prior_grad *= (-b / a);
+
 
     // add prior gradient to adjoint gradient
+    for (const auto idx : owned)
+      grad_log_lik_x_distributed[idx] += prior_grad[idx];
+
+
+    // Reduce to a global (serial) vector for output
+    Utilities::MPI::sum(grad_log_lik_x_distributed,
+                        MPI_COMM_WORLD,
+                        grad_log_lik_x);
+
+    pcout << "Successfully added prior gradient to adjoint gradient!"
+          << std::endl;
   }
 
   // ---------------------- run simulation adjoint ----------------------------
@@ -267,6 +307,9 @@ namespace darcy
   {
     setup_grid_and_dofs();
     read_input_npy(input_path);
+    generate_ref_input(); // TODO: should be removed in production
+    generate_coordinates();
+    read_upstream_gradient_npy(input_path);
     read_primary_solution(output_path); // this needs the dof handler hence
                                         // after setup_grid_and_dofs
     assemble_approx_schur_complement();
@@ -372,27 +415,29 @@ namespace darcy
               {
                 JxW_q = fe_values.JxW(q);
 
-                // ------ outer loop over all dofs of the cell -----------
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                // ------- loop over random field dofs per cell ------
+                for (unsigned int k = 0; k < rf_dofs_per_cell; ++k)
                   {
-                    const Tensor<1, dim> phi_i_u =
-                      fe_values[velocities].value(i, q);
-                    double local_solution_i = solution_local[i];
+                    RandomMedium::get_jacobi_inv_kmat(
+                      rf_value[q],
+                      fe_rf_values.shape_value(k, q),
+                      jacobi_k_mat_inv_value);
 
-                    // ----- inner loop over all dofs of the cell ---------
-                    for (unsigned int j = 0; j < dofs_per_cell; ++j)
+
+                    // ------ outer loop over all dofs of the cell -----------
+                    for (unsigned int i = 0; i < dofs_per_cell; ++i)
                       {
-                        const Tensor<1, dim> phi_j_u =
-                          fe_values[velocities].value(j, q);
-                        double local_primary_j = solution_primary_local[j];
+                        const Tensor<1, dim> phi_i_u =
+                          fe_values[velocities].value(i, q);
+                        double local_solution_i = solution_local[i];
 
-                        // ------- loop over random field dofs per cell ------
-                        for (unsigned int k = 0; k < rf_dofs_per_cell; ++k)
+                        // ----- inner loop over all dofs of the cell ---------
+                        for (unsigned int j = 0; j < dofs_per_cell; ++j)
                           {
-                            RandomMedium::get_jacobi_inv_kmat(
-                              rf_value[q],
-                              fe_rf_values.shape_value(k, q),
-                              jacobi_k_mat_inv_value);
+                            const Tensor<1, dim> phi_j_u =
+                              fe_values[velocities].value(j, q);
+                            double local_primary_j = solution_primary_local[j];
+
 
                             // compute inner product and add to global vector
                             grad_log_lik_x_distributed
@@ -401,10 +446,10 @@ namespace darcy
                               (phi_i_u * jacobi_k_mat_inv_value * phi_j_u *
                                JxW_q) *
                               local_primary_j;
-                          } // end loop over random field dofs
+                          } // inner end loop dofs per cell
 
-                      } // inner end loop dofs per cell
-                  } // end outer dof loop
+                      } // end outer dof loop
+                  } // end loop over random field dofs
 
               } // end loop quadrature points
 
@@ -414,10 +459,11 @@ namespace darcy
 
     // sum the proc-wise grad_log_lik_x over all processors to get the final
     // gradient
-    Utilities::MPI::sum(grad_log_lik_x_distributed,
-                        MPI_COMM_WORLD,
-                        grad_log_lik_x);
-    pcout << "Successfully summed grad_log_lik_x over processors" << std::endl;
+    // Utilities::MPI::sum(grad_log_lik_x_distributed,
+    //                     MPI_COMM_WORLD,
+    //                     grad_log_lik_x);
+    // pcout << "Successfully summed grad_log_lik_x over processors" <<
+    // std::endl;
   }
 
 } // end namespace darcy

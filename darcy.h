@@ -148,7 +148,8 @@ namespace darcy
       grad_pde_x; // New PDE gradient that needs to be implemented
 
     // random field stuff
-    Vector<double> x_vec; // the input vector for the simulation
+    Vector<double>                x_vec; // the input vector for the simulation
+    TrilinosWrappers::MPI::Vector mean_rf; // mean of the random field
 
     // Vector<double> random_field_vec;
     std::vector<Point<dim>> spatial_coordinates;
@@ -165,7 +166,6 @@ namespace darcy
                                 // problem
     TrilinosWrappers::MPI::BlockVector solution_primary_distributed;
 
-    TrilinosWrappers::MPI::Vector  mean_rf; // mean of the random field
     TrilinosWrappers::SparseMatrix rf_laplace_matrix; // laplace matrix for the
                                                       // random field
 
