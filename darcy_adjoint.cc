@@ -341,130 +341,135 @@ namespace darcy
                                      "Final inner adjoint product");
     pcout << "Final inner adjoint product with jacobi_k_mat_inv" << std::endl;
 
-    // get tensor function and evaluate it at all dofs
-    unsigned int   x_dim = x_vec.size();
-    Tensor<2, dim> jacobi_k_mat_inv_value;
+    const unsigned int x_dim = x_vec.size();
 
-    // reinit the final gradient vector
     grad_log_lik_x.resize(x_dim);
     grad_log_lik_x_distributed.resize(x_dim);
 
-    // quadrature formula, fe values and dofs
-    // standard gauss quadrature
-    const QGauss<dim>  quadrature(degree_u +
-                                 2); // we choose a coarser quadrature here
-    FEValues<dim>      fe_values(fe,
+    const QGauss<dim> quadrature(degree_u + 2);
+    FEValues<dim>     fe_values(fe,
                             quadrature,
                             update_quadrature_points | update_values |
                               update_JxW_values);
-    FEValues<dim>      fe_rf_values(rf_fe_system,
+
+    FEValues<dim> fe_rf_values(rf_fe_system,
                                quadrature,
                                update_values | update_quadrature_points);
-    const unsigned int n_q_points = quadrature.size();
-    // other stuff
-    FEValuesExtractors::Vector velocities(0);
-    const unsigned int         dofs_per_cell = fe.n_dofs_per_cell();
-    const unsigned int rf_dofs_per_cell      = rf_fe_system.n_dofs_per_cell();
 
-    // local to global mapping for random field
+    const unsigned int n_q_points       = quadrature.size();
+    const unsigned int dofs_per_cell    = fe.n_dofs_per_cell();
+    const unsigned int rf_dofs_per_cell = rf_fe_system.n_dofs_per_cell();
+
+    FEValuesExtractors::Vector velocities(0);
+
+    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     std::vector<types::global_dof_index> local_rf_dof_indices(rf_dofs_per_cell);
 
-    // local to global dof mapping for solution
-    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+    // Scratch arrays reused for every cell
+    std::vector<double>         solution_local(dofs_per_cell);
+    std::vector<double>         solution_primary_local(dofs_per_cell);
+    std::vector<double>         rf_value(n_q_points);
+    std::vector<Tensor<1, dim>> phi_u(dofs_per_cell);
+    std::vector<double>         local_rf_grad(rf_dofs_per_cell);
+
+    Tensor<2, dim> jacobi_k_mat_inv_value;
+
+    // If these are already the right vectors, consider removing these copies
     solution_distributed         = solution;
     solution_primary_distributed = solution_primary_problem;
 
-    // instantiate some variables
-    Tensor<1, dim>          velocity_dofs_vec;
-    std::vector<Point<dim>> q_points(n_q_points);
-    double                  JxW_q;
+    // Optional: if fe is mixed (velocity+pressure), precompute velocity dof
+    // list. Uncomment and use vel_dof_indices below to speed up further.
+    /*
+    std::vector<unsigned int> vel_dof_indices;
+    vel_dof_indices.reserve(dofs_per_cell);
+    for (unsigned int i = 0; i < dofs_per_cell; ++i)
+      if (fe.system_to_component_index(i).first < dim) // velocity components
+        vel_dof_indices.push_back(i);
+    */
 
-    // start the cell loop
     for (const auto &cell_tria : triangulation.active_cell_iterators())
       {
         const auto &cell = cell_tria->as_dof_handler_iterator(dof_handler);
         const auto &rf_cell =
           cell_tria->as_dof_handler_iterator(rf_dof_handler);
 
-        // only consider locally owned cells
-        if (cell->is_locally_owned())
+        if (!cell->is_locally_owned())
+          continue;
+
+        fe_values.reinit(cell);
+        fe_rf_values.reinit(rf_cell);
+
+        cell->get_dof_indices(local_dof_indices);
+        rf_cell->get_dof_indices(local_rf_dof_indices);
+
+        // random field values at quadrature points
+        fe_rf_values.get_function_values(x_vec, rf_value);
+
+        // extract local solution vectors once
+        for (unsigned int i = 0; i < dofs_per_cell; ++i)
           {
-            fe_values.reinit(cell);
-            fe_rf_values.reinit(rf_cell);
-            cell->get_dof_indices(local_dof_indices);
-            q_points = fe_values.get_quadrature_points();
-            std::vector<double> solution_local(dofs_per_cell);
-            std::vector<double> solution_primary_local(dofs_per_cell);
-            unsigned int        global_dof_index;
-            rf_cell->get_dof_indices(local_rf_dof_indices);
+            const auto global_index = local_dof_indices[i];
+            solution_local[i]       = solution_distributed[global_index];
+            solution_primary_local[i] =
+              solution_primary_distributed[global_index];
+          }
 
-            // calculate k-th jacobi matrix
-            std::vector<double> rf_value(n_q_points);
-            fe_rf_values.get_function_values(x_vec, rf_value);
+        std::fill(local_rf_grad.begin(), local_rf_grad.end(), 0.0);
 
-            // get local solutions once before the quadrature loop
+        // ---- quadrature loop --------------------------------------------
+        for (unsigned int q = 0; q < n_q_points; ++q)
+          {
+            const double JxW_q = fe_values.JxW(q);
+
+            // precompute velocity shape values at this quadrature point
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+              phi_u[i] = fe_values[velocities].value(i, q);
+
+            // Build FE-evaluated fields at q:
+            // s_q = sum_i solution_i * phi_i(q)
+            // w_q = sum_j primary_j  * phi_j(q)
+            Tensor<1, dim> s_q;
+            Tensor<1, dim> w_q;
+
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
               {
-                global_dof_index  = local_dof_indices[i];
-                solution_local[i] = solution_distributed[global_dof_index];
-                solution_primary_local[i] =
-                  solution_primary_distributed[global_dof_index];
+                s_q += solution_local[i] * phi_u[i];
+                w_q += solution_primary_local[i] * phi_u[i];
               }
-            // ------ loop over quadrature points -------------
-            for (unsigned int q = 0; q < n_q_points; ++q)
+
+            double rf_q = rf_value[q];
+
+            // ---- loop over random field dofs (k) ------------------------
+            for (unsigned int k = 0; k < rf_dofs_per_cell; ++k)
               {
-                JxW_q = fe_values.JxW(q);
+                RandomMedium::get_jacobi_inv_kmat(
+                  rf_q, fe_rf_values.shape_value(k, q), jacobi_k_mat_inv_value);
 
-                // ------- loop over random field dofs per cell ------
-                for (unsigned int k = 0; k < rf_dofs_per_cell; ++k)
-                  {
-                    RandomMedium::get_jacobi_inv_kmat(
-                      rf_value[q],
-                      fe_rf_values.shape_value(k, q),
-                      jacobi_k_mat_inv_value);
+                // contrib_kq = w_q � (K * s_q)
+                // (matches your original ordering: phi_i * K * phi_j with i
+                // from solution, j from primary)
+                const Tensor<1, dim> Ks_q       = jacobi_k_mat_inv_value * s_q;
+                const double         contrib_kq = w_q * Ks_q;
 
+                local_rf_grad[k] += contrib_kq * JxW_q;
+              } // end k loop
+          } // end q loop
 
-                    // ------ outer loop over all dofs of the cell -----------
-                    for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                      {
-                        const Tensor<1, dim> phi_i_u =
-                          fe_values[velocities].value(i, q);
-                        double local_solution_i = solution_local[i];
+        // add local contribution to global gradient (std::vector scatter)
+        for (unsigned int k = 0; k < rf_dofs_per_cell; ++k)
+          grad_log_lik_x_distributed[local_rf_dof_indices[k]] +=
+            local_rf_grad[k];
+      } // end cell loop
 
-                        // ----- inner loop over all dofs of the cell ---------
-                        for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                          {
-                            const Tensor<1, dim> phi_j_u =
-                              fe_values[velocities].value(j, q);
-                            double local_primary_j = solution_primary_local[j];
-
-
-                            // compute inner product and add to global vector
-                            grad_log_lik_x_distributed
-                              [local_rf_dof_indices[k]] +=
-                              local_solution_i *
-                              (phi_i_u * jacobi_k_mat_inv_value * phi_j_u *
-                               JxW_q) *
-                              local_primary_j;
-                          } // inner end loop dofs per cell
-
-                      } // end outer dof loop
-                  } // end loop over random field dofs
-
-              } // end loop quadrature points
-
-          } // end if cell is locally owned
-      } // end loop cell
     pcout << "grad_log_x (distributed) successfully assembled!" << std::endl;
 
-    // sum the proc-wise grad_log_lik_x over all processors to get the final
-    // gradient
+    // If you need the global gradient across MPI ranks later:
     // Utilities::MPI::sum(grad_log_lik_x_distributed,
     //                     MPI_COMM_WORLD,
     //                     grad_log_lik_x);
-    // pcout << "Successfully summed grad_log_lik_x over processors" <<
-    // std::endl;
   }
+
 
 } // end namespace darcy
 
