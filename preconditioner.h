@@ -1,4 +1,14 @@
 // preconditioner.h
+// Block Schur complement preconditioner for the Darcy saddle-point system.
+//
+// System structure:
+//   [ M    B^T ] [ u ]   [ f ]
+//   [ B    0   ] [ p ] = [ g ]
+//
+// Preconditioner approximates the block LU factorization using:
+//   - Incomplete Cholesky on M (velocity mass-like block)
+//   - Incomplete Cholesky on approximate Schur complement S ≈ B M^{-1} B^T
+
 #ifndef PRECONDITIONER_H
 #define PRECONDITIONER_H
 
@@ -8,7 +18,10 @@ namespace Preconditioner
 {
   using namespace dealii;
 
-  // -----  inverse matrix class ----------------------
+  // ===========================================================================
+  // InverseMatrix: Wrapper to apply M^{-1} via iterative CG solve.
+  // Used as a building block in the Schur complement preconditioner.
+  // ===========================================================================
   template <class MatrixType, class PreconditionerType>
   class InverseMatrix : public Subscriptor
   {
@@ -16,6 +29,7 @@ namespace Preconditioner
     InverseMatrix(const MatrixType         &m,
                   const PreconditionerType &preconditioner);
 
+    // Apply dst = M^{-1} * src using preconditioned CG
     template <typename VectorType>
     void
     vmult(VectorType &dst, const VectorType &src) const;
@@ -25,7 +39,6 @@ namespace Preconditioner
     const PreconditionerType &preconditioner;
   };
 
-  // constructor
   template <class MatrixType, class PreconditionerType>
   InverseMatrix<MatrixType, PreconditionerType>::InverseMatrix(
     const MatrixType         &m,
@@ -34,7 +47,6 @@ namespace Preconditioner
     , preconditioner(preconditioner)
   {}
 
-  // vmult function
   template <class MatrixType, class PreconditionerType>
   template <typename VectorType>
   void
@@ -61,9 +73,17 @@ namespace Preconditioner
       }
   }
 
-  // ---------------------------------------------------------------------------
-  // Block Schur Preconditioner
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
+  // BlockSchurPreconditioner: Block triangular preconditioner for saddle-point.
+  //
+  // Forward (vmult): Solves lower triangular system
+  //   [ M   0  ] [ u ]   [ f ]
+  //   [ B   -S ] [ p ] = [ g ]
+  //
+  // Transpose (Tvmult): Solves upper triangular system (for adjoint)
+  //   [ M   B^T ] [ u ]   [ f ]
+  //   [ 0   -S  ] [ p ] = [ g ]
+  // ===========================================================================
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
   class BlockSchurPreconditioner : public Subscriptor
   {
@@ -73,18 +93,17 @@ namespace Preconditioner
                              const PreconditionerTypeM  &ap_M_inv,
                              TimerOutput                &computing_timer);
 
-    // Standard Forward Solve (Lower Triangular Block)
+    // Forward solve (lower triangular block)
     void
     vmult(TrilinosWrappers::MPI::BlockVector       &dst,
           const TrilinosWrappers::MPI::BlockVector &src) const;
 
-    // Transpose Solve (Upper Triangular Block)
+    // Transpose solve (upper triangular block) - used for adjoint
     void
     Tvmult(TrilinosWrappers::MPI::BlockVector       &dst,
            const TrilinosWrappers::MPI::BlockVector &src) const;
 
-    // Dimensions (Delegated to system matrix)
-    // Required for the TransposeOperator wrapper to work
+    // Matrix dimensions (required for TransposeOperator wrapper)
     types::global_dof_index
     m() const
     {
@@ -99,18 +118,17 @@ namespace Preconditioner
 
   private:
     const TrilinosWrappers::BlockSparseMatrix &system_matrix;
-    const PreconditionerTypeaS                &ap_S_inv;
-    const PreconditionerTypeM                 &ap_M_inv;
+    const PreconditionerTypeaS                &ap_S_inv; // Approximate S^{-1}
+    const PreconditionerTypeM                 &ap_M_inv; // Approximate M^{-1}
     TimerOutput                               &computing_timer;
-    mutable TrilinosWrappers::MPI::Vector      tmp; // size n_p (pressure block)
-    mutable TrilinosWrappers::MPI::Vector tmp_u;    // size n_u (velocity block)
+    mutable TrilinosWrappers::MPI::Vector tmp;   // Temporary (pressure-sized)
+    mutable TrilinosWrappers::MPI::Vector tmp_u; // Temporary (velocity-sized)
   };
 
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
   // Implementation
-  // ---------------------------------------------------------------------------
+  // ===========================================================================
 
-  // Constructor
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
   BlockSchurPreconditioner<PreconditionerTypeaS, PreconditionerTypeM>::
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,
@@ -127,9 +145,9 @@ namespace Preconditioner
             System.get_mpi_communicator())
   {}
 
-  // vmult: Solves Lower Triangular System
-  // [ M   0  ] [ u ]   [ f ]
-  // [ B   -S ] [ p ] = [ g ]
+  // Forward solve: [ M 0; B -S ] * [u; p] = [f; g]
+  // Step 1: u = M^{-1} f
+  // Step 2: p = S^{-1} (B u - g)
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
   void
   BlockSchurPreconditioner<PreconditionerTypeaS, PreconditionerTypeM>::vmult(
@@ -138,37 +156,20 @@ namespace Preconditioner
   {
     TimerOutput::Scope timer_section(computing_timer,
                                      "   Apply preconditioner");
-    // 1. Solve M * u = f
+    // Step 1: Solve M * u = f
     ap_M_inv.vmult(dst.block(0), src.block(0));
 
-    // 2. Update RHS for p: r_p = g - B * u
+    // Step 2: Compute residual r_p = g - B * u
     system_matrix.block(1, 0).residual(tmp, dst.block(0), src.block(1));
 
-    // 3. Solve -S * p = r_p
+    // Step 3: Solve -S * p = r_p  =>  p = -S^{-1} * r_p
     tmp *= -1;
     ap_S_inv.vmult(dst.block(1), tmp);
   }
 
-  // Tvmult: Solves Upper Triangular System (Transpose of vmult)
-  //
-  // The forward preconditioner approximates:
-  // [ M       0 ] [ u ]   [ f ]
-  // [ B_10   -S ] [ p ] = [ g ]
-  //
-  // The transpose of this lower triangular system is upper triangular:
-  // [ M^T    B_10^T ] [ u ]   [ f ]
-  // [ 0       -S^T  ] [ p ] = [ g ]
-  //
-  // Since M and S are symmetric (M^T = M, S^T = S), and B_10^T means
-  // we need to apply the TRANSPOSE of block(1,0):
-  //
-  // [ M      B_10^T ] [ u ]   [ f ]
-  // [ 0       -S    ] [ p ] = [ g ]
-  //
-  // Solving this upper triangular system:
-  // 1. From row 2: -S * p = g  =>  p = -S_inv * g
-  // 2. From row 1: M * u = f - B_10^T * p  =>  u = M_inv * (f - B_10^T * p)
-  //
+  // Transpose solve: [ M B^T; 0 -S ] * [u; p] = [f; g]
+  // Step 1: p = -S^{-1} g
+  // Step 2: u = M^{-1} (f - B^T p)
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
   void
   BlockSchurPreconditioner<PreconditionerTypeaS, PreconditionerTypeM>::Tvmult(
@@ -178,22 +179,20 @@ namespace Preconditioner
     TimerOutput::Scope timer_section(computing_timer,
                                      "   Apply transpose preconditioner");
 
-    // 1. Solve for p (Second block): -S * p = g
+    // Step 1: Solve -S * p = g  =>  p = -S^{-1} * g
     ap_S_inv.vmult(dst.block(1), src.block(1));
     dst.block(1) *= -1.0;
 
-    // 2. Update RHS for u: M * u = f - B_10^T * p
-    // Calculate B_10^T * p into tmp_u (velocity-sized vector)
-    // B_10 = system_matrix.block(1, 0) has dims n_p x n_u
-    // B_10^T has dims n_u x n_p, so B_10^T * p gives velocity-sized vector
-    // We use Tvmult on block(1,0) to compute B_10^T * p
+    // Step 2: Compute B^T * p (using Tvmult on B block)
     system_matrix.block(1, 0).Tvmult(tmp_u, dst.block(1));
 
-    // Calculate effective RHS: tmp_u = f - (B_10^T * p) = src.block(0) - tmp_u
+    // Step 3: Compute RHS for velocity: tmp_u = f - B^T * p
     tmp_u.sadd(-1.0, 1.0, src.block(0));
 
-    // 3. Solve for u: u = M_inv * tmp_u
+    // Step 4: Solve M * u = tmp_u
     ap_M_inv.vmult(dst.block(0), tmp_u);
   }
-} // end namespace Preconditioner
-#endif
+
+} // namespace Preconditioner
+
+#endif // PRECONDITIONER_H

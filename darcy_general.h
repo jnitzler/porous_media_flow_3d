@@ -8,7 +8,8 @@
 
 namespace darcy
 {
-  // ---------------- generate reference input from function -----------
+  // Generate reference permeability field from analytical function (for
+  // testing).
   template <int dim>
   void
   Darcy<dim>::generate_ref_input()
@@ -17,7 +18,8 @@ namespace darcy
     VectorTools::interpolate(rf_dof_handler, ref_scalar, x_vec);
   }
 
-  // generate coordinates at which observations are present
+  // Populate spatial_coordinates with observation point locations.
+  // Uses vertices from triangulation_obs (serial mesh for observations).
   template <int dim>
   void
   Darcy<dim>::generate_coordinates()
@@ -38,7 +40,7 @@ namespace darcy
           << std::endl;
   }
 
-  // ------ class constructor ----------------
+  // Constructor: initialize FE systems, triangulation, and MPI communicators.
   template <int dim>
   Darcy<dim>::Darcy(const unsigned int degree_p)
     : degree_p(degree_p)
@@ -60,7 +62,8 @@ namespace darcy
 
   {}
 
-  // ------ read input file ------------------------------
+  // Read log-permeability field from .npy file into x_vec.
+  // File must contain rf_dof_handler.n_dofs() values.
   template <int dim>
   void
   Darcy<dim>::read_input_npy(const std::string &filename)
@@ -91,7 +94,7 @@ namespace darcy
   }
 
 
-  // -------- pressure boundary values ----------------------------
+  // Pressure boundary condition function (returns 0 on outer boundary).
   template <int dim>
   class PressureBoundaryValues : public Function<dim>
   {
@@ -113,7 +116,8 @@ namespace darcy
   }
 
 
-  // ------------- assemble approx Schur complement ---------
+  // Assemble pressure-Laplacian matrix for Schur complement preconditioner.
+  // Uses Nitsche's method for boundary conditions on pressure.
   template <int dim>
   void
   Darcy<dim>::assemble_approx_schur_complement()
@@ -126,7 +130,7 @@ namespace darcy
     const QGauss<dim - 1> face_quadrature_formula(degree_p + 1);
 
     // Use higher-order mapping for curved geometry (eccentric_hyper_shell)
-    const MappingQ<dim> mapping(1);
+    const MappingQ<dim> mapping(2);
 
     // start the cell loop
     FEValues<dim>      fe_values(mapping,
@@ -267,7 +271,9 @@ namespace darcy
     pcout << "Preconditioner successfully assembled" << std::endl;
   }
 
-  // ------------- assemble system -----------------
+  // Assemble the Darcy system matrix and RHS.
+  // Mixed formulation: (K^{-1} u, v) - (p, div v) + (grad q, u) = (f, q).
+  // Weak BCs: pressure on outer boundary (id=1), zero velocity on inner (id=0).
   template <int dim>
   void
   Darcy<dim>::assemble_system()
@@ -282,7 +288,7 @@ namespace darcy
     const QGauss<dim - 1> face_quadrature_formula(degree_u + 1);
 
     // Use higher-order mapping for curved geometry (eccentric_hyper_shell)
-    const MappingQ<dim> mapping(1);
+    const MappingQ<dim> mapping(2);
 
     FEValues<dim>      fe_values(mapping,
                             fe,
@@ -486,7 +492,8 @@ namespace darcy
     pcout << "System successfully assembled" << std::endl;
   }
 
-  // ---------- setup system matrix ------------------------
+  // Setup sparsity pattern and reinit system_matrix for the saddle-point
+  // system.
   template <int dim>
   void
   Darcy<dim>::setup_system_matrix(
@@ -535,7 +542,7 @@ namespace darcy
            // this should be moved to a separate function in the future
   }
 
-  // ---------- setup approx schur complement ------------------------
+  // Setup sparsity pattern for the Schur complement preconditioner matrix.
   template <int dim>
   void
   Darcy<dim>::setup_approx_schur_complement(
@@ -569,7 +576,9 @@ namespace darcy
     precondition_matrix.reinit(sp);
   }
 
-  // --------- setup grid and dofs ----------------
+  // Create eccentric_hyper_shell mesh, distribute DOFs, setup constraints and
+  // matrices. Generates both the main mesh and a coarser observation mesh
+  // (triangulation_obs).
   template <int dim>
   void
   Darcy<dim>::setup_grid_and_dofs()
@@ -597,54 +606,24 @@ namespace darcy
     double       outer_radius = 1.0; // outer radius
     unsigned int n_cells      = 12;  // n_cells
 
-    // GridGenerator::eccentric_hyper_shell(triangulation,
-    //                                      inner_center,
-    //                                      outer_center,
-    //                                      inner_radius,
-    //                                      outer_radius,
-    //                                      n_cells);
+    GridGenerator::eccentric_hyper_shell(triangulation,
+                                         inner_center,
+                                         outer_center,
+                                         inner_radius,
+                                         outer_radius,
+                                         n_cells);
 
-    GridGenerator::hyper_cube(triangulation, 0, 1, true);
-
-    for (const auto &cell : triangulation.active_cell_iterators())
-      {
-        // In a parallel triangulation, we only modify cells we 'own' or 'ghost'
-        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell;
-             ++f)
-          {
-            if (cell->face(f)->at_boundary() and
-                cell->face(f)->boundary_id() != 0)
-              {
-                cell->face(f)->set_boundary_id(1);
-              }
-          }
-      }
-    GridGenerator::hyper_cube(triangulation_obs, 0.01, 0.99, true);
-    for (const auto &cell : triangulation_obs.active_cell_iterators())
-      {
-        // In a parallel triangulation, we only modify cells we 'own' or 'ghost'
-        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell;
-             ++f)
-          {
-            if (cell->face(f)->at_boundary() and
-                cell->face(f)->boundary_id() != 0)
-              {
-                cell->face(f)->set_boundary_id(1);
-              }
-          }
-      }
-    // // introduce coarse tria/grid for artificial observations only
-    // GridGenerator::eccentric_hyper_shell(triangulation_obs,
-    //                                      inner_center,
-    //                                      outer_center,
-    //                                      inner_radius + 0.05,
-    //                                      outer_radius - 0.05,
-    //                                      n_cells); // TODO: hack to have
-    //                                      different mesh
-    triangulation_obs.refine_global(5);
+    // introduce coarse tria/grid for artificial observations only
+    GridGenerator::eccentric_hyper_shell(triangulation_obs,
+                                         inner_center,
+                                         outer_center,
+                                         inner_radius + 0.05,
+                                         outer_radius - 0.05,
+                                         n_cells);
+    triangulation_obs.refine_global(3);
 
     // now the actual grid for the forward problem
-    triangulation.refine_global(5); // 4
+    triangulation.refine_global(4);
     dof_handler.distribute_dofs(fe);
     DoFRenumbering::Cuthill_McKee(
       dof_handler); // Cuthill_McKee, component_wise to be more efficient
@@ -652,16 +631,6 @@ namespace darcy
 
     // generate grid and distribute dofs for random field
     rf_dof_handler.distribute_dofs(rf_fe_system);
-    // DoFRenumbering::Cuthill_McKee(
-    //   rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
-
-    // NOTE: Do NOT apply DoFRenumbering here (e.g., Cuthill_McKee).
-    // The input .npy files contain values in a specific global DOF order
-    // that was determined when the file was created. Any renumbering would
-    // change the DOF-to-physical-location mapping, causing x_vec[i] to
-    // correspond to a different spatial location than intended.
-    // If Cuthill-McKee is desired for performance, regenerate all input
-    // files with the new numbering.
 
     // Setup index sets for the random field (needed for parallel x_vec)
     rf_locally_owned = rf_dof_handler.locally_owned_dofs();
@@ -741,6 +710,8 @@ namespace darcy
                                         MPI_COMM_WORLD);
   }
 
+  // Helper class: wraps a matrix to provide transpose operations.
+  // Used for solving adjoint system A^T x = b.
   template <typename MatrixType>
   class TransposeOperator : public Subscriptor
   {
@@ -786,7 +757,8 @@ namespace darcy
     const MatrixType &matrix;
   };
 
-  // ------------- solver ----------------------
+  // Solve the linear system using GMRES with block Schur preconditioner.
+  // If adjoint_solve=true, solves A^T x = b instead of A x = b.
   template <int dim>
   void
   Darcy<dim>::solve(const bool adjoint_solve)
@@ -895,6 +867,7 @@ namespace darcy
           << " GMRES iterations to obtain convergence." << std::endl;
   }
 
+  // Write data vector to .npy file (NumPy format). Only call from rank 0.
   template <int dim>
   void
   Darcy<dim>::write_data_to_npy(const std::string   &filename,

@@ -6,6 +6,8 @@
 
 namespace darcy
 {
+  // Read upstream gradient (dL/dy) from "adjoint_data.npy".
+  // Reshapes flat array [u1_all, u2_all, ...] into data_vec[point][component].
   template <int dim>
   void
   Darcy<dim>::read_upstream_gradient_npy(const std::string &input_file_path)
@@ -54,7 +56,8 @@ namespace darcy
       }
   }
 
-  // ---------------------- read primary solution npy --------------------------
+  // Load forward solution from "_solution_full.npy" into
+  // solution_primary_problem. Required for computing adjoint inner product.
   template <int dim>
   void
   Darcy<dim>::read_primary_solution(const std::string &output_path)
@@ -95,7 +98,9 @@ namespace darcy
       << std::endl;
   }
 
-  // ---------------------- overwrite adjoint rhs ------------------------------
+  // Replace system_rhs with adjoint source term: sum_k (dL/dy_k) * phi_i(x_k).
+  // Evaluates shape functions at observation points and weights by upstream
+  // gradient.
   template <int dim>
   void
   Darcy<dim>::overwrite_adjoint_rhs()
@@ -104,7 +109,7 @@ namespace darcy
 
     system_rhs                                         = 0;
     const unsigned int                   dofs_per_cell = fe.n_dofs_per_cell();
-    MappingQ<dim>                        dummy_mapping(1);
+    MappingQ<dim>                        dummy_mapping(2);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
 
     // start the cell loop
@@ -167,7 +172,8 @@ namespace darcy
     pcout << "Adjoint rhs norm: " << system_rhs.l2_norm() << std::endl;
   }
 
-  // ---------------------- run method adjoint --------------------------------
+  // Main entry point for adjoint computation.
+  // Runs full adjoint pipeline and prints timing summary.
   template <int dim>
   void
   Darcy<dim>::run(const std::string &input_path, const std::string &output_path)
@@ -181,7 +187,8 @@ namespace darcy
     pcout << std::endl;
   }
 
-  // ---------------------- create rf laplace operator -------------------------
+  // Build Laplace matrix L for GMRF prior on random field.
+  // Adds small mass matrix (nugget) for positive definiteness: Q = L + eps*M.
   template <int dim>
   void
   Darcy<dim>::create_rf_laplace_operator()
@@ -228,7 +235,7 @@ namespace darcy
     const QGauss<dim> quadrature(degree_u + 1); // fine quadrature
 
     // Use higher-order mapping for curved geometry
-    MappingQ<dim> mapping(1);
+    MappingQ<dim> mapping(2);
 
     // setup laplace matrix
     // Tell the template exactly which Function type we mean (coefficient == 1)
@@ -256,7 +263,8 @@ namespace darcy
     rf_laplace_matrix.add(epsilon, rf_mass_matrix);
   }
 
-  // ---------------------- add prior gradient to adjoint ----------------------
+  // Add GMRF prior gradient: grad_log_prior = -(a/b) * L * (x - mu).
+  // Uses Gamma hyperprior on precision with empirical Bayes update.
   template <int dim>
   void
   Darcy<dim>::add_prior_gradient_to_adjoint()
@@ -279,12 +287,6 @@ namespace darcy
     // Subtract mean directly (mean_rf is already a distributed owned-only
     // vector)
     x_minus_mean.add(-1.0, mean_rf); // x_minus_mean = x_vec - mean_rf
-
-    // GMRF prior with Gamma hyperprior on precision (EM/empirical Bayes):
-    // p(x) ∝ ∫ τ^(a₀-1) exp(-b₀τ) · τ^(n/2) exp(-τ/2 (x-μ)ᵀL(x-μ)) dτ
-    // This integrates to a Student-t like distribution.
-    // Gradient: ∇log p(x) = -(a/b) L(x - μ)
-    // where a = a₀ + n/2,  b = b₀ + ½(x-μ)ᵀL(x-μ)
 
     // Compute L(x - μ)
     rf_laplace_matrix.vmult(prior_grad,
@@ -312,7 +314,7 @@ namespace darcy
           << std::endl;
   }
 
-  // ---------------------- output gradient to vtu -----------------------------
+  // Write gradient field to "_gradient.pvtu" for visualization.
   template <int dim>
   void
   Darcy<dim>::output_gradient_vtu(const std::string &output_path)
@@ -346,7 +348,7 @@ namespace darcy
     data_out.attach_dof_handler(rf_dof_handler);
     data_out.add_data_vector(gradient_distributed, "gradient");
 
-    MappingQ<dim> mapping(1);
+    MappingQ<dim> mapping(2);
     data_out.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
 
     // Write output - extract directory and filename from output_path
@@ -361,7 +363,9 @@ namespace darcy
           << std::endl;
   }
 
-  // ---------------------- run simulation adjoint ----------------------------
+  // Execute complete adjoint pipeline:
+  // setup -> read data -> solve adjoint -> compute gradient -> add prior ->
+  // output.
   template <int dim>
   void
   Darcy<dim>::run_simulation(const std::string &input_path,
@@ -387,7 +391,7 @@ namespace darcy
     write_gradient_to_npy(output_path);
   }
 
-  // -------------------- write gradient to npy file -----------------------
+  // Write gradient to "_grad_solution.npy". Only rank 0 writes.
   template <int dim>
   void
   Darcy<dim>::write_gradient_to_npy(const std::string &output_path)
@@ -403,7 +407,7 @@ namespace darcy
       }
   }
 
-  // -------------- write pvtu with adjoint solution -------------------
+  // Write adjoint solution (velocity, pressure) to "_adjoint_solution.pvtu".
   template <int dim>
   void
   Darcy<dim>::write_adjoint_solution_pvtu(const std::string &output_path)
@@ -431,7 +435,7 @@ namespace darcy
                              interpretation);
 
     // build the patches - same as darcy.cc
-    MappingQ<dim> mapping(1); // nonlinear mapping
+    MappingQ<dim> mapping(2); // nonlinear mapping
     data_out.build_patches(mapping, degree_u, DataOut<dim>::curved_inner_cells);
 
     // Extract directory and filename from output_path
@@ -459,7 +463,8 @@ namespace darcy
           << std::endl;
   }
 
-  // ---------------------- final inner adjoint product -----------------------
+  // Compute gradient w.r.t. random field: dL/dx = -lambda^T (dA/dx) u.
+  // Evaluates adjoint-primary velocity inner product weighted by d(K^{-1})/dx.
   template <int dim>
   void
   Darcy<dim>::final_inner_adjoint_product()
@@ -475,8 +480,7 @@ namespace darcy
     grad_log_lik_x.assign(x_dim, 0.0);
     grad_log_lik_x_distributed.assign(x_dim, 0.0);
 
-    // Use MappingQ(1) for geometry mapping
-    const MappingQ<dim> mapping(1);
+    const MappingQ<dim> mapping(2);
 
     // quadrature formula, fe values and dofs
     const QGauss<dim> quadrature(degree_u + 1);

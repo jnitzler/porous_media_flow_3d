@@ -6,7 +6,9 @@
 
 namespace darcy // same namespace and in header file
 {
-  // --- output velocity at observation points to numpy array ---------
+  // Evaluate velocity at observation points and write to "_sol.npy".
+  // Output format: [all u_1, all u_2, ...] - velocity components stacked.
+  // Only rank 0 writes the file.
   template <int dim>
   void
   Darcy<dim>::output_velocity_at_observation_points_npy(
@@ -15,7 +17,7 @@ namespace darcy // same namespace and in header file
     TimerOutput::Scope timer_section(computing_timer,
                                      "   Remote point evaluation");
 
-    MappingQ<dim> dummy_mapping(1);
+    MappingQ<dim> dummy_mapping(2);
 
     solution_distributed = solution;
 
@@ -48,7 +50,9 @@ namespace darcy // same namespace and in header file
   }
 
 
-  // ----------------- output_npy -----------------
+  // Write full solution (velocity + pressure) to "_solution_full.npy".
+  // Gathers distributed solution to rank 0 using single MPI_Reduce.
+  // Only rank 0 writes the file.
   template <int dim>
   void
   Darcy<dim>::output_full_velocity_npy(const std::string &output_path)
@@ -98,7 +102,9 @@ namespace darcy // same namespace and in header file
       }
   }
 
-  // ----------------- output pvtu -----------------
+  // Write solution and random field to PVTU files for ParaView visualization.
+  // Outputs: "_solution.pvtu" with velocity/pressure, "_random_field.pvtu" with
+  // log_k and k.
   template <int dim>
   void
   Darcy<dim>::output_pvtu(const std::string &output_path) const
@@ -136,7 +142,7 @@ namespace darcy // same namespace and in header file
     data_out.add_data_vector(subdomain, "subdomain");
 
     // build the patches
-    MappingQ<dim> mapping(1); // nonlinear mapping
+    MappingQ<dim> mapping(2); // nonlinear mapping
     data_out.build_patches(mapping, degree_u, DataOut<dim>::curved_inner_cells);
 
     constexpr unsigned int n_digits_counter = 2;
@@ -186,7 +192,8 @@ namespace darcy // same namespace and in header file
       stripped_path_rf, filename_rf, cycle, MPI_COMM_WORLD, n_digits_counter);
   }
 
-  // ----------------- run methods -----------------
+  // Main entry point: run the forward Darcy flow simulation.
+  // Calls run_simulation and prints timing summary.
   template <int dim>
   void
   Darcy<dim>::run(const std::string &input_path, const std::string &output_path)
@@ -198,6 +205,8 @@ namespace darcy // same namespace and in header file
     pcout << std::endl;
   }
 
+  // Execute complete forward simulation pipeline:
+  // setup -> read input -> assemble -> solve -> output results.
   template <int dim>
   void
   Darcy<dim>::run_simulation(const std::string &input_path,
