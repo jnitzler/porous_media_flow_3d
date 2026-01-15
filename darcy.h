@@ -86,11 +86,13 @@ namespace darcy
     void
     setup_grid_and_dofs();
     void
+    setup_grid_and_dofs_adjoint();
+    void
     assemble_approx_schur_complement();
     void
     assemble_system();
     void
-    solve();
+    solve(const bool solve_adjoint = false);
     void
     output_pvtu(const std::string &output_path) const;
     void
@@ -115,13 +117,19 @@ namespace darcy
     create_rf_laplace_operator();
     void
     add_prior_gradient_to_adjoint();
+    void
+    output_gradient_vtu(const std::string &output_path);
+    void
+    write_adjoint_solution_pvtu(const std::string &output_path);
+    void
+    write_gradient_to_npy(const std::string &output_path);
 
     const unsigned int degree_p;
     const unsigned int degree_u;
 
     parallel::distributed::Triangulation<dim> triangulation; // for problem
-    parallel::distributed::Triangulation<dim>
-                    triangulation_obs; // for observation points
+    Triangulation<dim>
+                    triangulation_obs; // for observation points (serial, small)
     FESystem<dim>   fe;
     DoFHandler<dim> dof_handler;
 
@@ -147,18 +155,25 @@ namespace darcy
     FullMatrix<double>
       grad_pde_x; // New PDE gradient that needs to be implemented
 
-    // random field stuff
-    Vector<double>                x_vec; // the input vector for the simulation
+    // random field stuff (distributed with ghost values for parallel access)
+    TrilinosWrappers::MPI::Vector x_vec; // the input vector for the simulation
+    TrilinosWrappers::MPI::Vector
+      x_vec_distributed; // the input vector for the simulation
     TrilinosWrappers::MPI::Vector mean_rf; // mean of the random field
+
+    // Index sets for the random field DOFs
+    IndexSet rf_locally_owned;
+    IndexSet rf_locally_relevant;
 
     // Vector<double> random_field_vec;
     std::vector<Point<dim>> spatial_coordinates;
-    std::vector<double>     output_data;
 
     ConditionalOStream  pcout;
     TimerOutput         computing_timer;  // timer for sub programs
     std::vector<double> adjoint_data_vec; // adjoint data vector with partial
                                           // derivative of likelihood
+    std::vector<double> grad_log_lik_x_partial_distributed;
+
     std::vector<std::vector<double>>
       data_vec; // general input data which will be split to actual data
     TrilinosWrappers::MPI::BlockVector

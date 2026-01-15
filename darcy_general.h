@@ -14,7 +14,6 @@ namespace darcy
   Darcy<dim>::generate_ref_input()
   {
     const RandomMedium::RefScalar<dim> ref_scalar;
-    x_vec.reinit(rf_dof_handler.n_dofs());
     VectorTools::interpolate(rf_dof_handler, ref_scalar, x_vec);
   }
 
@@ -23,28 +22,20 @@ namespace darcy
   void
   Darcy<dim>::generate_coordinates()
   {
-    //    // ------ generate coordinates ----------------//
-    //    const unsigned int n_points = 20;
-    //    const double       h        = 1.0 / (n_points - 1);
-    //    Point<dim>         p;
-    //    spatial_coordinates.resize(Utilities::fixed_power<dim>(n_points));
-    //
-    //    for (unsigned int idx = 0; idx < spatial_coordinates.size(); ++idx)
-    //      {
-    //        unsigned int tempIdx = idx;
-    //        for (int d = 0; d < dim; ++d)
-    //          {
-    //            p[d] = (tempIdx % n_points) * h;
-    //            tempIdx /= n_points;
-    //          }
-    //        spatial_coordinates[idx] = p;
-    //      }
+    // triangulation_obs is a serial Triangulation, so all ranks have the
+    // complete mesh with all vertices. Simply collect all unique vertices.
     spatial_coordinates.resize(triangulation_obs.n_vertices());
-    for (const auto &c : triangulation_obs.active_cell_iterators())
+    for (const auto &cell : triangulation_obs.active_cell_iterators())
       {
-        for (unsigned int v = 0; v < c->n_vertices(); ++v)
-          spatial_coordinates[c->vertex_index(v)] = c->vertex(v);
+        for (unsigned int v = 0; v < cell->n_vertices(); ++v)
+          {
+            spatial_coordinates[cell->vertex_index(v)] = cell->vertex(v);
+          }
       }
+
+
+    pcout << "Number of observation points: " << spatial_coordinates.size()
+          << std::endl;
   }
 
   // ------ class constructor ----------------
@@ -56,13 +47,10 @@ namespace darcy
                     typename Triangulation<dim>::MeshSmoothing(
                       Triangulation<dim>::smoothing_on_refinement |
                       Triangulation<dim>::smoothing_on_coarsening))
-    , triangulation_obs(MPI_COMM_WORLD,
-                        typename Triangulation<dim>::MeshSmoothing(
-                          Triangulation<dim>::smoothing_on_refinement |
-                          Triangulation<dim>::smoothing_on_coarsening))
+    , triangulation_obs() // serial triangulation for observation points
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
-    , rf_fe_system(FE_Q<dim>(2), 1)
+    , rf_fe_system(FE_Q<dim>(1), 1)
     , rf_dof_handler(triangulation)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
@@ -82,19 +70,23 @@ namespace darcy
     std::vector<unsigned long> shape{};
     bool                       fortran_order{};
 
-    // read in the permeability field
+    // Read the full vector on all ranks (file I/O is typically fast)
     std::vector<double> x_std_vec;
     npy::LoadArrayFromNumpy(filename, shape, fortran_order, x_std_vec);
 
-    unsigned int n_dofs_rf = rf_dof_handler.n_dofs();
-    x_vec.reinit(n_dofs_rf);
+    const unsigned int n_dofs_rf = rf_dof_handler.n_dofs();
     pcout << "Read in random field from file: " << filename << std::endl;
-    pcout << "Number of random field dofs: " << x_vec.size() << std::endl;
+    pcout << "Number of random field dofs: " << n_dofs_rf << std::endl;
     pcout << "Number of input field dofs: " << x_std_vec.size() << std::endl;
-    for (unsigned int i = 0; i < n_dofs_rf; ++i)
-      {
-        x_vec[i] = x_std_vec[i];
-      }
+
+    // Create owned-only temporary vector, fill it, then assign to x_vec
+    // (the assignment to a ghosted vector triggers ghost value communication)
+    TrilinosWrappers::MPI::Vector x_owned(rf_locally_owned, MPI_COMM_WORLD);
+    for (const auto i : rf_locally_owned)
+      x_owned[i] = x_std_vec[i];
+    x_owned.compress(VectorOperation::insert);
+    x_vec = x_owned; // Assignment to ghosted vector updates ghost values
+
     pcout << "Random field successfully read in." << std::endl;
   }
 
@@ -120,29 +112,6 @@ namespace darcy
     return 0.0;
   }
 
-  // -------- velocity boundary values ----------------------------
-  template <int dim>
-  class VelocityBoundaryValues : public Function<dim>
-  {
-  public:
-    VelocityBoundaryValues()
-      : Function<dim>(3)
-    {}
-
-    void
-    vector_value(const Point<dim> &p, Vector<double> &vector) const override;
-  };
-
-  template <int dim>
-  void
-  VelocityBoundaryValues<dim>::vector_value(const Point<dim> &p,
-                                            Vector<double>   &vector) const
-  {
-    vector[0] = 0.0;
-    vector[1] = 0.0;
-    vector[2] = p[2]; // pressure
-  }
-
 
   // ------------- assemble approx Schur complement ---------
   template <int dim>
@@ -156,18 +125,24 @@ namespace darcy
     const QGauss<dim>     quadrature_formula(degree_p + 1);
     const QGauss<dim - 1> face_quadrature_formula(degree_p + 1);
 
+    // Use higher-order mapping for curved geometry (eccentric_hyper_shell)
+    const MappingQ<dim> mapping(1);
+
     // start the cell loop
-    FEValues<dim>      fe_values(fe,
+    FEValues<dim>      fe_values(mapping,
+                            fe,
                             quadrature_formula,
                             update_JxW_values | update_values |
                               update_quadrature_points | update_gradients);
-    FEFaceValues<dim>  fe_face_values(fe,
+    FEFaceValues<dim>  fe_face_values(mapping,
+                                     fe,
                                      face_quadrature_formula,
                                      update_values | update_gradients |
                                        update_normal_vectors |
                                        update_quadrature_points |
                                        update_JxW_values);
-    FEValues<dim>      fe_rf_values(rf_fe_system,
+    FEValues<dim>      fe_rf_values(mapping,
+                               rf_fe_system,
                                quadrature_formula,
                                update_values | update_quadrature_points);
     const unsigned int dofs_per_cell   = fe.n_dofs_per_cell();
@@ -175,6 +150,7 @@ namespace darcy
     const unsigned int n_face_q_points = fe_face_values.n_quadrature_points;
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
+    x_vec_distributed = x_vec; // make sure ghost values are updated
 
     for (const auto &cell_tria : triangulation.active_cell_iterators())
       {
@@ -199,7 +175,7 @@ namespace darcy
             // get rf function values and permeability tensor per cell
             std::vector<double> rf_values(n_q_points);
             Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(x_vec, rf_values);
+            fe_rf_values.get_function_values(x_vec_distributed, rf_values);
 
             // quadrature loop
             for (unsigned int q = 0; q < n_q_points; ++q)
@@ -304,21 +280,28 @@ namespace darcy
 
     const QGauss<dim>     quadrature_formula(degree_u + 1);
     const QGauss<dim - 1> face_quadrature_formula(degree_u + 1);
-    FEValues<dim>         fe_values(fe,
+
+    // Use higher-order mapping for curved geometry (eccentric_hyper_shell)
+    const MappingQ<dim> mapping(1);
+
+    FEValues<dim>      fe_values(mapping,
+                            fe,
                             quadrature_formula,
                             update_values | update_quadrature_points |
                               update_JxW_values | update_gradients);
-    FEValues<dim>         fe_rf_values(rf_fe_system,
+    FEValues<dim>      fe_rf_values(mapping,
+                               rf_fe_system,
                                quadrature_formula,
                                update_values | update_quadrature_points);
-    FEFaceValues<dim>     fe_face_values(fe,
+    FEFaceValues<dim>  fe_face_values(mapping,
+                                     fe,
                                      face_quadrature_formula,
                                      update_values | update_normal_vectors |
                                        update_quadrature_points |
                                        update_JxW_values);
-    const unsigned int    dofs_per_cell   = fe.n_dofs_per_cell();
-    const unsigned int    n_q_points      = fe_values.n_quadrature_points;
-    const unsigned int    n_face_q_points = fe_face_values.n_quadrature_points;
+    const unsigned int dofs_per_cell   = fe.n_dofs_per_cell();
+    const unsigned int n_q_points      = fe_values.n_quadrature_points;
+    const unsigned int n_face_q_points = fe_face_values.n_quadrature_points;
     std::vector<Tensor<1, dim>>          phi_u(dofs_per_cell);
     std::vector<double>                  div_phi_u(dofs_per_cell);
     std::vector<double>                  phi_p(dofs_per_cell);
@@ -356,7 +339,7 @@ namespace darcy
             // solution values
             std::vector<double> rf_values(n_q_points);
             Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(x_vec, rf_values);
+            fe_rf_values.get_function_values(x_vec_distributed, rf_values);
 
             // ---- INTERIOR loop over quadrature points ------------ //
             for (unsigned int q = 0; q < n_q_points; ++q)
@@ -597,30 +580,71 @@ namespace darcy
     block_component[dim] = 1;
 
     // generate grid and distribute dofs
-    Point<dim>   inner_center(0.0, 0.1, 0.25);
-    Point<dim>   outer_center(0.0, 0.0, 0.0);
+    Point<dim> inner_center;
+    Point<dim> outer_center;
+    if constexpr (dim == 2)
+      {
+        inner_center = Point<dim>(0.0, 0.1);
+        outer_center = Point<dim>(0.0, 0.0);
+      }
+    else if constexpr (dim == 3)
+      {
+        inner_center = Point<dim>(0.0, 0.1, 0.25);
+        outer_center = Point<dim>(0.0, 0.0, 0.0);
+      }
+
     double       inner_radius = 0.3; // inner radius
     double       outer_radius = 1.0; // outer radius
     unsigned int n_cells      = 12;  // n_cells
 
-    GridGenerator::eccentric_hyper_shell(triangulation,
-                                         inner_center,
-                                         outer_center,
-                                         inner_radius,
-                                         outer_radius,
-                                         n_cells);
+    // GridGenerator::eccentric_hyper_shell(triangulation,
+    //                                      inner_center,
+    //                                      outer_center,
+    //                                      inner_radius,
+    //                                      outer_radius,
+    //                                      n_cells);
 
-    // introduce coarse tria/grid for artificial observations only
-    GridGenerator::eccentric_hyper_shell(triangulation_obs,
-                                         inner_center,
-                                         outer_center,
-                                         inner_radius,
-                                         outer_radius,
-                                         n_cells);
-    triangulation_obs.refine_global(3);
+    GridGenerator::hyper_cube(triangulation, 0, 1, true);
+
+    for (const auto &cell : triangulation.active_cell_iterators())
+      {
+        // In a parallel triangulation, we only modify cells we 'own' or 'ghost'
+        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell;
+             ++f)
+          {
+            if (cell->face(f)->at_boundary() and
+                cell->face(f)->boundary_id() != 0)
+              {
+                cell->face(f)->set_boundary_id(1);
+              }
+          }
+      }
+    GridGenerator::hyper_cube(triangulation_obs, 0.01, 0.99, true);
+    for (const auto &cell : triangulation_obs.active_cell_iterators())
+      {
+        // In a parallel triangulation, we only modify cells we 'own' or 'ghost'
+        for (unsigned int f = 0; f < dealii::GeometryInfo<dim>::faces_per_cell;
+             ++f)
+          {
+            if (cell->face(f)->at_boundary() and
+                cell->face(f)->boundary_id() != 0)
+              {
+                cell->face(f)->set_boundary_id(1);
+              }
+          }
+      }
+    // // introduce coarse tria/grid for artificial observations only
+    // GridGenerator::eccentric_hyper_shell(triangulation_obs,
+    //                                      inner_center,
+    //                                      outer_center,
+    //                                      inner_radius + 0.05,
+    //                                      outer_radius - 0.05,
+    //                                      n_cells); // TODO: hack to have
+    //                                      different mesh
+    triangulation_obs.refine_global(5);
 
     // now the actual grid for the forward problem
-    triangulation.refine_global(4);
+    triangulation.refine_global(5); // 4
     dof_handler.distribute_dofs(fe);
     DoFRenumbering::Cuthill_McKee(
       dof_handler); // Cuthill_McKee, component_wise to be more efficient
@@ -628,9 +652,27 @@ namespace darcy
 
     // generate grid and distribute dofs for random field
     rf_dof_handler.distribute_dofs(rf_fe_system);
-    DoFRenumbering::Cuthill_McKee(
-      rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
+    // DoFRenumbering::Cuthill_McKee(
+    //   rf_dof_handler); // Cuthill_McKee, component_wise to be more efficient
 
+    // NOTE: Do NOT apply DoFRenumbering here (e.g., Cuthill_McKee).
+    // The input .npy files contain values in a specific global DOF order
+    // that was determined when the file was created. Any renumbering would
+    // change the DOF-to-physical-location mapping, causing x_vec[i] to
+    // correspond to a different spatial location than intended.
+    // If Cuthill-McKee is desired for performance, regenerate all input
+    // files with the new numbering.
+
+    // Setup index sets for the random field (needed for parallel x_vec)
+    rf_locally_owned = rf_dof_handler.locally_owned_dofs();
+    rf_locally_relevant =
+      DoFTools::extract_locally_relevant_dofs(rf_dof_handler);
+
+    // Initialize x_vec as a distributed vector with ghost values
+    x_vec.reinit(rf_locally_owned, MPI_COMM_WORLD);
+    x_vec_distributed.reinit(rf_locally_owned,
+                             rf_locally_relevant,
+                             MPI_COMM_WORLD);
 
     // count dofs per block
     const std::vector<types::global_dof_index> dofs_per_block =
@@ -668,14 +710,16 @@ namespace darcy
       const FEValuesExtractors::Vector velocity(0);
       const FEValuesExtractors::Scalar pressure(dim);
 
-      // system constraints
-      VelocityBoundaryValues<dim> velocity_bc_pres;
+      // system constraints - must reinit with locally relevant DOFs for
+      // parallel
       constraints.clear();
+      constraints.reinit(relevant_set);
       DoFTools::make_hanging_node_constraints(dof_handler, constraints);
       constraints.close();
 
       // take care of constraints for preconditioner
       preconditioner_constraints.clear();
+      preconditioner_constraints.reinit(relevant_set);
       DoFTools::make_hanging_node_constraints(dof_handler,
                                               preconditioner_constraints);
 
@@ -697,10 +741,55 @@ namespace darcy
                                         MPI_COMM_WORLD);
   }
 
+  template <typename MatrixType>
+  class TransposeOperator : public Subscriptor
+  {
+  public:
+    // Constructor stores a reference to the original matrix
+    TransposeOperator(const MatrixType &matrix)
+      : matrix(matrix)
+    {}
+
+    // The Solver calls vmult, but we execute the Transpose (Tvmult)
+    template <typename VectorType>
+    void
+    vmult(VectorType &dst, const VectorType &src) const
+    {
+      matrix.Tvmult(dst, src);
+    }
+
+    // Optional: If the solver requires the transpose of this operator
+    // (which is the original matrix), we map it back to vmult.
+    template <typename VectorType>
+    void
+    Tvmult(VectorType &dst, const VectorType &src) const
+    {
+      matrix.vmult(dst, src);
+    }
+
+    // Return dimensions flipped:
+    // The number of rows of A^T is the number of columns of A.
+    types::global_dof_index
+    m() const
+    {
+      return matrix.n();
+    }
+
+    // The number of columns of A^T is the number of rows of A.
+    types::global_dof_index
+    n() const
+    {
+      return matrix.m();
+    }
+
+  private:
+    const MatrixType &matrix;
+  };
+
   // ------------- solver ----------------------
   template <int dim>
   void
-  Darcy<dim>::solve()
+  Darcy<dim>::solve(const bool adjoint_solve)
   {
     TimerOutput::Scope timer_section(computing_timer, "   Solve system");
     const auto        &M    = system_matrix.block(0, 0);
@@ -729,43 +818,72 @@ namespace darcy
 
     // ------------------ construct the final inverse operator for the system
     // -----------
-    SolverControl solver_control_system(system_matrix.m(),
-                                        1.e-16 * system_rhs.l2_norm());
+    // Use ReductionControl for both absolute and relative tolerance:
+    // - Absolute tolerance: 1e-14 (floor for very small RHS)
+    // - Relative tolerance (reduction): 1e-10 (reduce residual by 10 orders of
+    // magnitude)
+    const double rhs_norm = system_rhs.l2_norm();
+    const double abs_tol  = 1.e-14;
+    const double rel_reduction =
+      1.e-12; // This is the reduction factor, not absolute
+
+    pcout << "Solver: abs_tol=" << abs_tol
+          << ", rel_reduction=" << rel_reduction << ", RHS norm=" << rhs_norm
+          << std::endl;
+
+    // ReductionControl solver_control_system(system_matrix.m(),
+    //                                        abs_tol,
+    //                                        rel_reduction);
+    dealii::SolverControl solver_control_system(system_matrix.m(),
+                                                1.0e-10 * system_rhs.l2_norm(),
+                                                true,
+                                                1.0e-10);
     solver_control_system.enable_history_data();
     solver_control_system.log_history(true);
     solver_control_system.log_result(true);
     SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver_system(
       solver_control_system,
-      SolverGMRES<TrilinosWrappers::MPI::BlockVector>::AdditionalData(100));
+      SolverGMRES<TrilinosWrappers::MPI::BlockVector>::AdditionalData(200));
 
-    // ----------- distribute the constraints to the solution vector
-    // --------------------
-    for (unsigned int i = 0; i < solution.size(); ++i)
-      if (constraints.is_constrained(i))
-        solution(i) = 0;
+    // ----------- initialize solution vectors --------------------
+    // Zero the solution vector for a deterministic initial guess.
+    // Note: We use weak BCs (Nitsche) for both pressure and velocity,
+    // so constraints only contain hanging nodes. With global refinement,
+    // there are no hanging nodes, so constraints is empty.
+    solution = 0;
 
     // ------------------ solve the system
     // ------------------------------------------------
     TrilinosWrappers::MPI::BlockVector distributed_solution(system_rhs);
-    distributed_solution = solution;
-    const unsigned int start =
-                         (distributed_solution.block(0).size() +
-                          distributed_solution.block(1).local_range().first),
-                       end =
-                         (distributed_solution.block(0).size() +
-                          distributed_solution.block(1).local_range().second);
-
-    for (unsigned int i = start; i < end; ++i)
-      if (constraints.is_constrained(i))
-        distributed_solution(i) = 0;
+    distributed_solution = 0; // Explicit zero initial guess for reproducibility
 
     pcout << "Starting iterative solver..." << std::endl;
     {
       TimerOutput::Scope timer_section(computing_timer, "   Solve gmres");
-      solver_system.solve(system_matrix,
-                          distributed_solution,
-                          system_rhs,
-                          block_preconditioner);
+      if (adjoint_solve)
+        {
+          // Solve the adjoint
+          // 1. Wrap the System Matrix
+          TransposeOperator<decltype(system_matrix)> system_transposed(
+            system_matrix);
+
+          // 2. Wrap the Preconditioner
+          TransposeOperator<decltype(block_preconditioner)>
+            preconditioner_transposed(block_preconditioner);
+
+          // 3. Solve
+          solver_system.solve(system_transposed,
+                              distributed_solution,
+                              system_rhs,
+                              preconditioner_transposed);
+        }
+      else
+        {
+          solver_system.solve(system_matrix,
+                              distributed_solution,
+                              system_rhs,
+                              block_preconditioner);
+        }
     }
     constraints.distribute(distributed_solution);
     solution = distributed_solution;
