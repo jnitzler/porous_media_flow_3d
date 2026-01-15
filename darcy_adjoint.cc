@@ -317,7 +317,7 @@ namespace darcy
   // Write gradient field to "_gradient.pvtu" for visualization.
   template <int dim>
   void
-  Darcy<dim>::output_gradient_vtu(const std::string &output_path)
+  Darcy<dim>::output_gradient_pvtu(const std::string &output_path)
   {
     TimerOutput::Scope timing_section(computing_timer, "Output gradient VTU");
     pcout << "Writing gradient to VTU file..." << std::endl;
@@ -383,11 +383,11 @@ namespace darcy
     assemble_system();
     overwrite_adjoint_rhs();
     solve(adjoint_solve);
-    write_adjoint_solution_pvtu(output_path);
+    // write_adjoint_solution_pvtu(output_path);
     final_inner_adjoint_product();
     create_rf_laplace_operator();
     add_prior_gradient_to_adjoint();
-    output_gradient_vtu(output_path);
+    // output_gradient_pvtu(output_path);
     write_gradient_to_npy(output_path);
   }
 
@@ -616,7 +616,7 @@ main(int argc, char *argv[])
       using namespace darcy;
       Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
       const unsigned int               fe_degree = 1;
-      Darcy<2>                         mixed_laplace_problem(fe_degree);
+      Darcy<3>                         mixed_laplace_problem(fe_degree);
       mixed_laplace_problem.run(input_file_path, output_file_path);
     }
   catch (std::exception &exc)

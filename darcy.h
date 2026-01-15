@@ -172,7 +172,7 @@ namespace darcy
     void
     write_adjoint_solution_pvtu(const std::string &output_path);
     void
-    output_gradient_vtu(const std::string &output_path);
+    output_gradient_pvtu(const std::string &output_path);
     void
     write_gradient_to_npy(const std::string &output_path);
 

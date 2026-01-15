@@ -249,7 +249,7 @@ main(int argc, char *argv[])
       Utilities::MPI::MPI_InitFinalize mpi_initialization(
         argc, argv, numbers::invalid_unsigned_int);
       const unsigned int fe_degree = 1;
-      Darcy<2>           mixed_laplace_problem(fe_degree);
+      Darcy<3>           mixed_laplace_problem(fe_degree);
       mixed_laplace_problem.run(input_file_path, output_file_path);
     }
   catch (std::exception &exc)
