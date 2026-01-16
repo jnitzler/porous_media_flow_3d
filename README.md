@@ -1,66 +1,27 @@
-#Isotropic Darcy flow
-This is a fully parallelized implementation of a darcy flow PDE with a
-  transverse isotropic permeability field,
-  using deal.ii.The governing equations that are solved read as follows :
+# Isotropic Darcy flow
 
-```math
-\begin{align * } K ^ { -1 }\boldsymbol{u} + \nabla p &= 0 \text
-{
-  in
-}
-\Omega\ -\text
-{
-  div
-}
-\boldsymbol{u} &= f \text
-{
-  in
-}
-\Omega\ p &= g \text
-{
-  on
-}
-\delta\Omega
-\end
-{
-  align *
-}
-```
+This is a fully parallelized implementation of a Darcy flow PDE with a transverse isotropic permeability field, using deal.II. The governing equations that are solved read as follows:
 
-  With $`K`$ being a $`\dim\times\dim`$ permeability tensor,
-  $`\boldsymbol
-{
-  u
-}
-`$ the flow velocity and $`p`$ the                      pressure.We
-  implemented a transverse isotropic permeability field $`K(\boldsymbol{x})`$,
-  which is modeled by random fields,
-  parameterized by a set of coefficients $`\boldsymbol
-{
-  x
-}`$.
+$$
+\begin{align*}
+K^{-1} \boldsymbol{u} + \nabla p &= 0 \quad \text{in } \Omega \\
+-\text{div} \, \boldsymbol{u} &= f \quad \text{in } \Omega \\
+p &= g \quad \text{on } \partial\Omega
+\end{align*}
+$$
+
+With $K$ being a $\dim \times \dim$ permeability tensor, $\boldsymbol{u}$ the flow velocity and $p$ the pressure. We implemented a transverse isotropic permeability field $K(\boldsymbol{x})$, which is modeled by random fields, parameterized by a set of coefficients $\boldsymbol{x}$.
 
 The project builds two executables:
--  1) darcy.cc $`\rightarrow`$ darcy: The actual main executable and forward solve of the pde for a specific choice of random field coefficients $`\boldsymbol
-{
-  x
-}`$ which imposes the mapping: $`\boldsymbol{y}=f(\boldsymbol{x})`$
--  2) darcy_adjoint.cc $`\rightarrow`$ darcy_adjoint: The associated adjoint problem that returns the derivative $`\frac{\partial g(f(\boldsymbol{x}))}
-{
-  \partial \boldsymbol
-  {
-    x
-  }
-}`$ for an objective function $`g`$
+1. `darcy.cc` → `darcy`: The main executable and forward solve of the PDE for a specific choice of random field coefficients $\boldsymbol{x}$ which imposes the mapping: $\boldsymbol{y} = f(\boldsymbol{x})$
+2. `darcy_adjoint.cc` → `darcy_adjoint`: The associated adjoint problem that returns the derivative $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$ for an objective function $g$
 
 ## Random permeability field
-The random isotropic permeability tensor $`K(\boldsymbol{x})`$ is modeled as follows:
-$`K(\boldsymbol{x})=\exp(\boldsymbol{x})\cdot I`$,
+The random isotropic permeability tensor $K(\boldsymbol{x})$ is modeled as follows:
 
-such that $`\boldsymbol
-{
-  x
-}`$ can be inferred without constraints.
+$$K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$$
+
+such that $\boldsymbol{x}$ can be inferred without constraints.
 ## Running the executables
 The executables require
 - a path to an input file
