@@ -6,7 +6,9 @@
 
 namespace darcy // same namespace and in header file
 {
-  // --- output velocity at observation points to numpy array ---------
+  // Evaluate velocity at observation points and write to "_sol.npy".
+  // Output format: [all u_1, all u_2, ...] - velocity components stacked.
+  // Only rank 0 writes the file.
   template <int dim>
   void
   Darcy<dim>::output_velocity_at_observation_points_npy(
@@ -15,152 +17,94 @@ namespace darcy // same namespace and in header file
     TimerOutput::Scope timer_section(computing_timer,
                                      "   Remote point evaluation");
 
-    // collect data of interest to write out in output_data
-    // set up a dummy mapping
-    MappingQ<dim> dummy_mapping(1);
+    MappingQ<dim> dummy_mapping(2);
 
-    // set up a cache / remote evaluation object
-    Utilities::MPI::RemotePointEvaluation<dim, dim> remote_eval_obj;
-    remote_eval_obj.reinit(spatial_coordinates, triangulation, dummy_mapping);
-
-    // get the solution values at the points of interest for time step
-    solution_distributed = solution; // take care of the distributed solution
-    // Note: dim will give the first three velocity components?
-    const auto data_array =
-      VectorTools::point_values<dim>(remote_eval_obj,
-                                     dof_handler,
-                                     solution_distributed);
-
-    // append them to the data vector
-    std::vector<double> l_output_data(dim * data_array.size());
-
-    // loop over experimental data point locations and their values
-    // resulting output format: row vector with first u_1 block then u_2 block
-    // NOTE: this has to match with what is expected in QUEENS
-    for (unsigned int j = 0, k = 0; j < dim; ++j)
-      {
-        for (unsigned int i = 0; i < data_array.size(); ++i, ++k)
-          {
-            l_output_data[k] = data_array[i][j];
-          }
-      }
-
-    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
-      {
-        const std::string  filename = output_path + "_sol.npy";
-        const unsigned int num_data = l_output_data.size();
-        write_data_to_npy(filename, l_output_data, num_data, 1);
-      }
-  }
-
-
-  // --------- output field at observation points to numpy array
-  // ----------------
-  // --- below: x-feature
-  template <int dim>
-  void
-  Darcy<dim>::output_field_at_observation_points_npy(
-    const std::string &output_path)
-  {
-    // collect data of interest to write out in output_data
-    // set up a dummy mapping
-    MappingQ<dim> dummy_mapping(1);
-
-    // set up a cache / remote evaluation object
-    Utilities::MPI::RemotePointEvaluation<dim, dim> remote_eval_obj;
-    remote_eval_obj.reinit(spatial_coordinates, triangulation, dummy_mapping);
-
-    // get the solution values at the points of interest for time step
     solution_distributed = solution;
 
-    //  const auto full_data_array = VectorTools::point_values<dim>(
-    //      remote_eval_obj, dof_handler, solution_distributed);
-    //
-    //  // append them to the data vector
-    //  std::vector<double> l_output_data(full_data_array.size());
+    // Use the old API that works correctly
+    Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(1.0e-9);
+    const auto data_array = VectorTools::point_values<dim>(dummy_mapping,
+                                                           dof_handler,
+                                                           solution_distributed,
+                                                           spatial_coordinates,
+                                                           evaluation_cache);
 
-    // Step 1: Create a coarser mesh
-    parallel::distributed::Triangulation<dim> coarse_tria(
-      triangulation.get_communicator());
-    coarse_tria.copy_triangulation(triangulation);
-    coarse_tria.coarsen_global(0); // coarsen the mesh once
-
-    // set up a coarse dof handler object
-    DoFHandler<dim> coarse_dof_handler(coarse_tria);
-    coarse_dof_handler.distribute_dofs(rf_fe_system);
-
-    // Step 2: Transfer the field to the coarser mesh
-    Vector<double> coarse_x_vec(coarse_dof_handler.n_dofs());
-    VectorTools::interpolate_to_different_mesh(rf_dof_handler,
-                                               x_vec,
-                                               coarse_dof_handler,
-                                               coarse_x_vec);
-
-    // Step 3: Transfer back to the fine mesh
-    Vector<double> x_smoothed(x_vec.size());
-    VectorTools::interpolate_to_different_mesh(coarse_dof_handler,
-                                               coarse_x_vec,
-                                               rf_dof_handler,
-                                               x_smoothed);
-
-    const auto data_array =
-      VectorTools::point_values<1>(remote_eval_obj, rf_dof_handler, x_smoothed);
-
-    // append them to the data vector
-    std::vector<double> feature_vec;
-
-    // loop over experimental data point locations and their values
-    // NOTE: this has to match with what is expected in QUEENS
-    for (const auto &entry : data_array)
-      {
-        feature_vec.push_back(std::exp(entry));
-      }
-
+    // Only rank 0 writes the output file
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        const std::string  filename = output_path + "_features.npy";
-        const unsigned int num_data = feature_vec.size();
-        write_data_to_npy(filename, feature_vec, num_data, 1);
+        const unsigned int  n_points = data_array.size();
+        std::vector<double> output_data(dim * n_points);
+
+        // Reorder: [all u_1, all u_2, all u_3]
+        for (unsigned int d = 0; d < dim; ++d)
+          {
+            for (unsigned int i = 0; i < n_points; ++i)
+              {
+                output_data[d * n_points + i] = data_array[i][d];
+              }
+          }
+        const std::string filename        = output_path + "_sol.npy";
+        const std::string filename_coords = output_path + "_coords.npy";
+        write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
 
-  // ----------------- output_npy -----------------
+
+  // Write full solution (velocity + pressure) to "_solution_full.npy".
+  // Gathers distributed solution to rank 0 using single MPI_Reduce.
+  // Only rank 0 writes the file.
   template <int dim>
   void
   Darcy<dim>::output_full_velocity_npy(const std::string &output_path)
   {
-    // copy solution to std vector
-    std::vector<double> std_solution(dof_handler.n_dofs());
+    TimerOutput::Scope timer_section(computing_timer,
+                                     "   Output full solution npy");
 
-    for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
-      {
-        if (solution.in_local_range(i))
-          {
-            std_solution[i] = solution[i];
-          }
-      }
+    solution_distributed = solution;
 
-    // gather the distributed solution to std_solution vector on process 0
-    std::vector<std::vector<double>> gathered_solution;
-    gathered_solution = Utilities::MPI::gather(MPI_COMM_WORLD, std_solution, 0);
+    const unsigned int n_dofs = dof_handler.n_dofs();
+    const unsigned int n_u    = solution.block(0).size();
 
-    // write the gathered solution that exists on rank 0 to one file
+    // Create local buffer - store locally owned values, zeros elsewhere
+    std::vector<double> local_solution(n_dofs, 0.0);
+
+    // Fill velocity block (global indices 0 to n_u-1)
+    for (const auto idx : solution.block(0).locally_owned_elements())
+      local_solution[idx] = solution.block(0)[idx];
+
+    // Fill pressure block (global indices n_u to n_dofs-1)
+    for (const auto idx : solution.block(1).locally_owned_elements())
+      local_solution[n_u + idx] = solution.block(1)[idx];
+
+    // Single MPI_Reduce to gather everything to rank 0
+    std::vector<double> full_solution;
+    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      full_solution.resize(n_dofs, 0.0);
+    else
+      full_solution.resize(1); // Non-root ranks need valid pointer
+
+    MPI_Reduce(local_solution.data(),
+               full_solution.data(),
+               n_dofs,
+               MPI_DOUBLE,
+               MPI_SUM,
+               0,
+               MPI_COMM_WORLD);
+
+    // Write the gathered solution on rank 0
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        std::vector<double> full_solution;
-        // Calculate the total size of the full solution
-        for (const auto &vec : gathered_solution)
-          {
-            full_solution.insert(full_solution.end(), vec.begin(), vec.end());
-          }
-        std::string filename = output_path + "_solution_full.npy";
-        // Assuming write_data_to_npy correctly writes the data in NumPy format
-        write_data_to_npy(filename, full_solution, full_solution.size(), 1);
+        const std::string file_path = output_path + "_solution_full.npy";
+        pcout << "Writing full solution to file: " << file_path << std::endl;
+        pcout << "Size of full solution: " << full_solution.size() << std::endl;
+        pcout << "Number of dofs: " << n_dofs << std::endl;
+        write_data_to_npy(file_path, full_solution, full_solution.size(), 1);
       }
+  }
 
-  } // end output_npy
-
-  // ----------------- output pvtu -----------------
+  // Write solution and random field to PVTU files for ParaView visualization.
+  // Outputs: "_solution.pvtu" with velocity/pressure, "_random_field.pvtu" with
+  // log_k and k.
   template <int dim>
   void
   Darcy<dim>::output_pvtu(const std::string &output_path) const
@@ -180,33 +124,34 @@ namespace darcy // same namespace and in header file
 
     DataOut<dim>          data_out;
     DataOutBase::VtkFlags flags;
-    flags.write_higher_order_cells = true;
+    flags.write_higher_order_cells = true; // Use standard VTK cells
     data_out.set_flags(flags);
     data_out.add_data_vector(dof_handler,
-                             solution,
+                             solution_distributed,
                              solution_names,
                              interpretation);
 
     // define the subdomains
     Vector<float> subdomain(triangulation.n_active_cells());
-    for (unsigned int i = 0; i < subdomain.size(); ++i)
-      subdomain(i) = triangulation.locally_owned_subdomain();
+    unsigned int  cell_index = 0;
+    for (const auto &cell : triangulation.active_cell_iterators())
+      {
+        subdomain(cell_index) = cell->subdomain_id();
+        ++cell_index;
+      }
     data_out.add_data_vector(subdomain, "subdomain");
 
     // build the patches
     MappingQ<dim> mapping(2); // nonlinear mapping
     data_out.build_patches(mapping, degree_u, DataOut<dim>::curved_inner_cells);
 
-    constexpr unsigned int num_vtu_files    = 4;
     constexpr unsigned int n_digits_counter = 2;
     constexpr unsigned int cycle = 0; // a counter for iterative output
-    std::cout << "stripped_path: " << stripped_path << std::endl;
-    data_out.write_vtu_with_pvtu_record(stripped_path,
-                                        filename,
-                                        cycle,
-                                        MPI_COMM_WORLD,
-                                        n_digits_counter,
-                                        num_vtu_files);
+    pcout << "stripped_path for solution: " << stripped_path << std::endl;
+    data_out.write_vtu_with_pvtu_record(
+      stripped_path, filename, cycle, MPI_COMM_WORLD, n_digits_counter);
+
+    pcout << "Written pvtu for the solution!" << std::endl;
 
     // define the random field
     const std::string filename_rf =
@@ -216,26 +161,39 @@ namespace darcy // same namespace and in header file
     DataOut<dim> data_out_rf;
     data_out_rf.set_flags(flags);
 
-    std::string    random_field_names = "k";
-    Vector<double> rf(x_vec.size());
-    for (unsigned int i = 0; i < x_vec.size(); ++i)
-      {
-        rf[i] = std::exp(x_vec[i]);
-      }
+    // Output the raw log-field for debugging
+    std::string random_field_names_log = "log_k";
+    data_out_rf.add_data_vector(rf_dof_handler,
+                                x_vec_distributed,
+                                random_field_names_log);
+
+    // Also output the exponentiated field k = exp(x_vec)
+    // Create an owned-only vector, fill it, then assign to ghosted vector
+    TrilinosWrappers::MPI::Vector rf_owned(rf_locally_owned, MPI_COMM_WORLD);
+    for (const auto i : rf_locally_owned)
+      rf_owned[i] = std::exp(x_vec_distributed[i]);
+    rf_owned.compress(VectorOperation::insert);
+
+    TrilinosWrappers::MPI::Vector rf(rf_locally_owned,
+                                     rf_locally_relevant,
+                                     MPI_COMM_WORLD);
+    rf = rf_owned; // Assignment to ghosted vector updates ghost values
+
+
+    std::string random_field_names = "k";
     data_out_rf.add_data_vector(rf_dof_handler, rf, random_field_names);
 
-    data_out_rf.build_patches(mapping,
-                              degree_u,
-                              DataOut<dim>::curved_inner_cells);
-    data_out_rf.write_vtu_with_pvtu_record(stripped_path_rf,
-                                           filename_rf,
-                                           cycle,
-                                           MPI_COMM_WORLD,
-                                           n_digits_counter,
-                                           num_vtu_files);
+    // Use curved cells with subdivision matching the FE degree for nice output.
+    // NOTE: In ParaView, keep "Nonlinear Subdivision Level" at 0 to avoid
+    // artifacts - ParaView's subdivision algorithm doesn't match FEM
+    // interpolation.
+    data_out_rf.build_patches(mapping, 1, DataOut<dim>::curved_inner_cells);
+    data_out_rf.write_vtu_with_pvtu_record(
+      stripped_path_rf, filename_rf, cycle, MPI_COMM_WORLD, n_digits_counter);
   }
 
-  // ----------------- run methods -----------------
+  // Main entry point: run the forward Darcy flow simulation.
+  // Calls run_simulation and prints timing summary.
   template <int dim>
   void
   Darcy<dim>::run(const std::string &input_path, const std::string &output_path)
@@ -247,6 +205,8 @@ namespace darcy // same namespace and in header file
     pcout << std::endl;
   }
 
+  // Execute complete forward simulation pipeline:
+  // setup -> read input -> assemble -> solve -> output results.
   template <int dim>
   void
   Darcy<dim>::run_simulation(const std::string &input_path,
@@ -254,17 +214,20 @@ namespace darcy // same namespace and in header file
   {
     setup_grid_and_dofs();
     read_input_npy(input_path);
-    generate_ref_input();
+    // generate_ref_input(); // TODO: should be removed in production
     generate_coordinates();
     assemble_approx_schur_complement();
     assemble_system();
     solve();
 
+    // Copy solution to ghosted vector for output
+    solution_distributed = solution;
+    x_vec_distributed    = x_vec;
+
     // output the results
     output_pvtu(output_path);
     output_full_velocity_npy(output_path);
     output_velocity_at_observation_points_npy(output_path);
-    output_field_at_observation_points_npy(output_path);
 
   } // end run simulation
 
@@ -280,6 +243,9 @@ main(int argc, char *argv[])
   try
     {
       using namespace darcy;
+      // Third argument = 1 disables TBB multi-threading for reproducibility.
+      // Even with 1 MPI rank, TBB can use multiple threads for assembly/solver
+      // causing non-deterministic floating-point summation order.
       Utilities::MPI::MPI_InitFinalize mpi_initialization(
         argc, argv, numbers::invalid_unsigned_int);
       const unsigned int fe_degree = 1;
