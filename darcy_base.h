@@ -178,15 +178,12 @@ namespace darcy
     TrilinosWrappers::BlockSparseMatrix system_matrix; // Saddle-point matrix
     TrilinosWrappers::BlockSparseMatrix
       precondition_matrix; // Schur preconditioner
-    TrilinosWrappers::BlockSparseMatrix
-      block_mass_matrix; // For adjoint (if needed)
 
     // --- Solution vectors ---
     TrilinosWrappers::MPI::BlockVector solution; // Current solution [u, p]
     TrilinosWrappers::MPI::BlockVector
       solution_distributed;                        // With ghost values
     TrilinosWrappers::MPI::BlockVector system_rhs; // Right-hand side
-    TrilinosWrappers::MPI::BlockVector temp_vec;   // Temporary storage
 
     // --- Random field vectors ---
     TrilinosWrappers::MPI::Vector x_vec; // Log-permeability (owned DOFs)
@@ -612,7 +609,6 @@ namespace darcy
     const std::vector<IndexSet> &relevant_partitioning)
   {
     this->system_matrix.clear();
-    this->block_mass_matrix.clear();
 
     TrilinosWrappers::BlockSparsityPattern sp(partitioning,
                           partitioning,
@@ -647,7 +643,6 @@ namespace darcy
     sp.compress();
 
     this->system_matrix.reinit(sp);
-    this->block_mass_matrix.reinit(sp);
   }
 
   template <int dim>
@@ -790,7 +785,6 @@ namespace darcy
     setup_approx_schur_complement(partitioning, relevant_partitioning);
 
     this->solution.reinit(partitioning, MPI_COMM_WORLD);
-    this->temp_vec.reinit(partitioning, MPI_COMM_WORLD);
     this->system_rhs.reinit(partitioning, MPI_COMM_WORLD);
     this->solution_distributed.reinit(partitioning,
                                       relevant_partitioning,
