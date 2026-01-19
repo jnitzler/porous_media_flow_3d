@@ -1,0 +1,6 @@
+subsection Input/Output
+  set input npy file = input/markov_field_5.npy
+  set output directory = output
+  set output prefix = 
+  set adjoint data file = adjoint_data.npy
+end

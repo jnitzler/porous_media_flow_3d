@@ -70,6 +70,7 @@
 #include "npy.hpp"
 
 // === Local helpers ===
+#include "parameters.h"
 #include "preconditioner.h"
 #include "random_permeability.h"
 
@@ -96,7 +97,7 @@ namespace darcy
 
     // Main entry point for simulation (pure virtual - implemented by derived classes)
     virtual void
-    run(const std::string &input_path, const std::string &output_path) = 0;
+    run(const Parameters &params) = 0;
 
     // Virtual destructor for proper cleanup
     virtual ~DarcyBase() = default;
@@ -202,6 +203,9 @@ namespace darcy
     // --- I/O and timing ---
     ConditionalOStream pcout;           // Only rank 0 prints
     TimerOutput        computing_timer; // Performance profiling
+
+    // --- Simulation parameters ---
+    Parameters params; // Configuration parameters
   };
 
 } // namespace darcy

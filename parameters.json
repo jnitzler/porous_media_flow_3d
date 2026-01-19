@@ -1,0 +1,8 @@
+{
+  "Input/Output": {
+    "input npy file": "input/markov_field_5.npy",
+    "output directory": "output/",
+    "output prefix": "darcy_",
+    "adjoint data file": "adjoint_data.npy"
+  }
+}
