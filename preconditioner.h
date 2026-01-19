@@ -12,7 +12,14 @@
 #ifndef PRECONDITIONER_H
 #define PRECONDITIONER_H
 
-#include "darcy.h"
+#include <deal.II/base/subscriptor.h>
+#include <deal.II/base/timer.h>
+#include <deal.II/lac/solver_cg.h>
+#include <deal.II/lac/solver_control.h>
+#include <deal.II/lac/trilinos_block_sparse_matrix.h>
+#include <deal.II/lac/trilinos_parallel_block_vector.h>
+#include <deal.II/lac/trilinos_sparse_matrix.h>
+#include <deal.II/lac/trilinos_vector.h>
 
 namespace Preconditioner
 {

@@ -1,8 +1,7 @@
 #include <deal.II/fe/mapping_q.h>
 #include <deal.II/numerics/matrix_tools.h>
 
-#include "darcy.h"
-#include "darcy_general.h"
+#include "darcy_adjoint.h"
 
 namespace darcy
 {

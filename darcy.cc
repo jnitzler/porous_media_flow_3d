@@ -1,8 +1,6 @@
-#include "darcy.h"
+#include "darcy_forward.h"
 
 #include <cstddef> // std::size_t
-
-#include "darcy_general.h"
 
 namespace darcy // same namespace and in header file
 {
