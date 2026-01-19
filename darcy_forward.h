@@ -30,6 +30,8 @@ namespace darcy
     // Forward-specific output methods
     // -------------------------------------------------------------------------
     void
+    output_pvtu(const std::string &output_path) const; // VTU for ParaView
+    void
     output_full_velocity_npy(
       const std::string &output_path); // Full solution to .npy
     void
@@ -154,7 +156,7 @@ namespace darcy
   // log_k and k.
   template <int dim>
   void
-  DarcyBase<dim>::output_pvtu(const std::string &output_path) const
+  Darcy<dim>::output_pvtu(const std::string &output_path) const
   {
     const std::size_t found    = output_path.find_last_of("/\\");
     const std::string filename = output_path.substr(found + 1) + "_solution";
@@ -272,7 +274,7 @@ namespace darcy
     this->x_vec_distributed    = this->x_vec;
 
     // output the results
-    this->output_pvtu(output_path);
+    output_pvtu(output_path);
     output_full_velocity_npy(output_path);
     output_velocity_at_observation_points_npy(output_path);
 

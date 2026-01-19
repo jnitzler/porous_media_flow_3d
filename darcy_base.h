@@ -144,8 +144,6 @@ namespace darcy
     // Output methods
     // -------------------------------------------------------------------------
     void
-    output_pvtu(const std::string &output_path) const; // VTU for ParaView
-    void
     write_data_to_npy(const std::string   &filename,
                       std::vector<double> &data,
                       unsigned int         rows,
