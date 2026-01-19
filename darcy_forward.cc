@@ -55,8 +55,7 @@ main(int argc, char *argv[])
       std::filesystem::create_directories(params.output_directory);
 
       // Run forward solver
-      const unsigned int fe_degree = 1;
-      DarcyForward<3>    mixed_laplace_problem(fe_degree);
+      DarcyForward<3>    mixed_laplace_problem(params.fe_degree);
       mixed_laplace_problem.run(params);
     }
   catch (std::exception &exc)

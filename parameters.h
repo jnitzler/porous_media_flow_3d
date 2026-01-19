@@ -20,6 +20,7 @@ namespace darcy
     std::string output_directory;
     std::string output_prefix;
     std::string adjoint_data_file;
+    unsigned int fe_degree;
 
     // Declare all parameters in the ParameterHandler
     static void
@@ -37,6 +38,15 @@ namespace darcy
   void
   Parameters::declare_parameters(dealii::ParameterHandler &prm)
   {
+    prm.enter_subsection("Discretization");
+    {
+      prm.declare_entry("pressure fe degree",
+                        "1",
+                        dealii::Patterns::Integer(0),
+                        "Polynomial degree of the pressure finite element");
+    }
+    prm.leave_subsection();
+
     prm.enter_subsection("Input/Output");
     {
       prm.declare_entry("input npy file",
@@ -68,6 +78,12 @@ namespace darcy
   void
   Parameters::parse_parameters(dealii::ParameterHandler &prm)
   {
+    prm.enter_subsection("Discretization");
+    {
+      fe_degree = prm.get_integer("pressure fe degree");
+    }
+    prm.leave_subsection();
+
     prm.enter_subsection("Input/Output");
     {
       input_npy_file     = prm.get("input npy file");

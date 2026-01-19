@@ -51,8 +51,7 @@ main(int argc, char *argv[])
       std::filesystem::create_directories(params.output_directory);
 
       // Run adjoint solver
-      const unsigned int fe_degree = 1;
-      DarcyAdjoint<3>    mixed_laplace_problem(fe_degree);
+      DarcyAdjoint<3>    mixed_laplace_problem(params.fe_degree);
       mixed_laplace_problem.run(params);
     }
   catch (std::exception &exc)
