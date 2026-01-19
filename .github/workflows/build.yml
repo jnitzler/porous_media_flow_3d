@@ -1,4 +1,4 @@
-name: Build with deal.II noble
+name: Build with deal.II
 
 on:
   push:
@@ -9,8 +9,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        container_image:
+          - dealii/dealii:master-noble
+          - dealii/dealii:v9.7.1-noble
     container:
-      image: dealii/dealii:master-noble
+      image: ${{ matrix.container_image }}
 
     steps:
     - name: Checkout repository
