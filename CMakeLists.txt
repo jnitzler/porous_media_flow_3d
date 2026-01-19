@@ -21,5 +21,5 @@ function(setup_executable target)
   deal_ii_setup_target(${target})
 endfunction()
 
-setup_executable("darcy")
+setup_executable("darcy_forward")
 setup_executable("darcy_adjoint")

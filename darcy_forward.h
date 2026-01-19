@@ -12,14 +12,14 @@
 namespace darcy
 {
   // ===========================================================================
-  // Darcy class: Forward Darcy flow solver
+  // DarcyForward class: Forward Darcy flow solver
   // ===========================================================================
   template <int dim>
-  class Darcy : public DarcyBase<dim>
+  class DarcyForward : public DarcyBase<dim>
   {
   public:
     // Constructor
-    explicit Darcy(const unsigned int degree_p);
+    explicit DarcyForward(const unsigned int degree_p);
 
     // Main entry point for forward simulation
     void
@@ -47,7 +47,7 @@ namespace darcy
 
   // Constructor implementation
   template <int dim>
-  Darcy<dim>::Darcy(const unsigned int degree_p)
+  DarcyForward<dim>::DarcyForward(const unsigned int degree_p)
     : DarcyBase<dim>(degree_p)
   {}
 
@@ -60,7 +60,7 @@ namespace darcy
   // Only rank 0 writes the file.
   template <int dim>
   void
-  Darcy<dim>::output_velocity_at_observation_points_npy(
+  DarcyForward<dim>::output_velocity_at_observation_points_npy(
     const std::string &output_path)
   {
     TimerOutput::Scope timer_section(this->computing_timer,
@@ -104,7 +104,7 @@ namespace darcy
   // Only rank 0 writes the file.
   template <int dim>
   void
-  Darcy<dim>::output_full_velocity_npy(const std::string &output_path)
+  DarcyForward<dim>::output_full_velocity_npy(const std::string &output_path)
   {
     TimerOutput::Scope timer_section(this->computing_timer,
                                      "   Output full solution npy");
@@ -156,7 +156,7 @@ namespace darcy
   // log_k and k.
   template <int dim>
   void
-  Darcy<dim>::output_pvtu(const std::string &output_path) const
+  DarcyForward<dim>::output_pvtu(const std::string &output_path) const
   {
     const std::size_t found    = output_path.find_last_of("/\\");
     const std::string filename = output_path.substr(found + 1) + "_solution";
@@ -245,7 +245,7 @@ namespace darcy
   // Calls run_simulation and prints timing summary.
   template <int dim>
   void
-  Darcy<dim>::run(const std::string &input_path, const std::string &output_path)
+  DarcyForward<dim>::run(const std::string &input_path, const std::string &output_path)
   {
     run_simulation(input_path, output_path);
 
@@ -258,8 +258,8 @@ namespace darcy
   // setup -> read input -> assemble -> solve -> output results.
   template <int dim>
   void
-  Darcy<dim>::run_simulation(const std::string &input_path,
-                             const std::string &output_path)
+  DarcyForward<dim>::run_simulation(const std::string &input_path,
+                                    const std::string &output_path)
   {
     this->setup_grid_and_dofs();
     this->read_input_npy(input_path);
