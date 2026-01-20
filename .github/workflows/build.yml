@@ -1,0 +1,37 @@
+name: Build with deal.II
+
+on:
+  push:
+    branches: [ main, refactor ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        container_image:
+          - dealii/dealii:master-noble
+          - dealii/dealii:v9.7.1-noble
+    container:
+      image: ${{ matrix.container_image }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Create build directory
+      run: mkdir -p build
+
+    - name: Configure CMake
+      working-directory: build
+      run: cmake .. -DDEAL_II_DIR=/usr/lib/x86_64-linux-gnu/cmake/deal.II
+
+    - name: Build
+      working-directory: build
+      run: make -j $(nproc)
+
+    - name: List executables
+      working-directory: build
+      run: ls -la darcy* || true

@@ -1,5 +1,6 @@
 # ignore build directory
 build/
+build-*/
 
 # ignore input and output directories
 output/

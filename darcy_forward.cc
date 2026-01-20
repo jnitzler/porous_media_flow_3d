@@ -1,9 +1,9 @@
-#include "darcy_adjoint.h"
+#include "darcy_forward.h"
 
 // Explicit template instantiation
-template class darcy::DarcyAdjoint<3>;
+template class darcy::DarcyForward<3>;
 
-// ---------------------- main function adjoint -----------------------------
+// ----------------- main -----------------
 int
 main(int argc, char *argv[])
 {
@@ -13,9 +13,13 @@ main(int argc, char *argv[])
   try
     {
       using namespace darcy;
-      Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
-      const unsigned int               fe_degree = 1;
-      DarcyAdjoint<3>                  mixed_laplace_problem(fe_degree);
+      // Third argument = 1 disables TBB multi-threading for reproducibility.
+      // Even with 1 MPI rank, TBB can use multiple threads for assembly/solver
+      // causing non-deterministic floating-point summation order.
+      Utilities::MPI::MPI_InitFinalize mpi_initialization(
+        argc, argv, numbers::invalid_unsigned_int);
+      const unsigned int fe_degree = 1;
+      DarcyForward<3>    mixed_laplace_problem(fe_degree);
       mixed_laplace_problem.run(input_file_path, output_file_path);
     }
   catch (std::exception &exc)
