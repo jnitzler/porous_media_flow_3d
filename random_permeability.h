@@ -13,12 +13,11 @@
 #ifndef RANDOM_PERMEABILITY_H
 #define RANDOM_PERMEABILITY_H
 
+#include <cmath>
 #include <deal.II/base/function.h>
 #include <deal.II/base/point.h>
 #include <deal.II/base/tensor.h>
 #include <deal.II/base/tensor_function.h>
-
-#include <cmath>
 #include <vector>
 
 namespace darcy
