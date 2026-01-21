@@ -69,11 +69,12 @@ namespace darcy
 
     // Use the old API that works correctly
     Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(1.0e-9);
-    const auto data_array = VectorTools::point_values<dim>(dummy_mapping,
-                                                           this->dof_handler,
-                                                           this->solution_distributed,
-                                                           this->spatial_coordinates,
-                                                           evaluation_cache);
+    const auto                                 data_array =
+      VectorTools::point_values<dim>(dummy_mapping,
+                                     this->dof_handler,
+                                     this->solution_distributed,
+                                     this->spatial_coordinates,
+                                     evaluation_cache);
 
     // Only rank 0 writes the output file
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
@@ -89,10 +90,11 @@ namespace darcy
                 output_data[d * n_points + i] = data_array[i][d];
               }
           }
-        const std::string filename = 
-          this->params.output_directory + "/" + this->params.output_prefix + "sol.npy";
-        const std::string filename_coords = 
-          this->params.output_directory + "/" + this->params.output_prefix + "coords.npy";
+        const std::string filename = this->params.output_directory + "/" +
+                                     this->params.output_prefix + "sol.npy";
+        const std::string filename_coords = this->params.output_directory +
+                                            "/" + this->params.output_prefix +
+                                            "coords.npy";
         this->write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
@@ -142,12 +144,18 @@ namespace darcy
     // Write the gathered solution on rank 0
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        const std::string file_path = 
-          this->params.output_directory + "/" + this->params.output_prefix + "solution_full.npy";
-        this->pcout << "Writing full solution to file: " << file_path << std::endl;
-        this->pcout << "Size of full solution: " << full_solution.size() << std::endl;
+        const std::string file_path = this->params.output_directory + "/" +
+                                      this->params.output_prefix +
+                                      "solution_full.npy";
+        this->pcout << "Writing full solution to file: " << file_path
+                    << std::endl;
+        this->pcout << "Size of full solution: " << full_solution.size()
+                    << std::endl;
         this->pcout << "Number of dofs: " << n_dofs << std::endl;
-        this->write_data_to_npy(file_path, full_solution, full_solution.size(), 1);
+        this->write_data_to_npy(file_path,
+                                full_solution,
+                                full_solution.size(),
+                                1);
       }
   }
 
@@ -158,7 +166,7 @@ namespace darcy
   void
   DarcyForward<dim>::output_pvtu() const
   {
-    const std::string filename = this->params.output_prefix + "solution";
+    const std::string filename      = this->params.output_prefix + "solution";
     const std::string stripped_path = this->params.output_directory + "/";
 
     // define the solution vector
@@ -191,7 +199,9 @@ namespace darcy
 
     // build the patches
     MappingQ<dim> mapping(2); // nonlinear mapping
-    data_out.build_patches(mapping, this->degree_u, DataOut<dim>::curved_inner_cells);
+    data_out.build_patches(mapping,
+                           this->degree_u,
+                           DataOut<dim>::curved_inner_cells);
 
     constexpr unsigned int n_digits_counter = 2;
     constexpr unsigned int cycle = 0; // a counter for iterative output
@@ -216,7 +226,8 @@ namespace darcy
 
     // Also output the exponentiated field k = exp(x_vec)
     // Create an owned-only vector, fill it, then assign to ghosted vector
-    TrilinosWrappers::MPI::Vector rf_owned(this->rf_locally_owned, MPI_COMM_WORLD);
+    TrilinosWrappers::MPI::Vector rf_owned(this->rf_locally_owned,
+                                           MPI_COMM_WORLD);
     for (const auto i : this->rf_locally_owned)
       rf_owned[i] = std::exp(this->x_vec_distributed[i]);
     rf_owned.compress(VectorOperation::insert);
