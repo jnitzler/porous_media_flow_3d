@@ -8,6 +8,7 @@
 
 // === deal.II base includes ===
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/enable_observer_pointer.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/index_set.h>
 #include <deal.II/base/logstream.h>
@@ -361,7 +362,6 @@ namespace darcy
 
             cell->get_dof_indices(local_dof_indices);
 
-            const FEValuesExtractors::Vector velocities(0);
             const FEValuesExtractors::Scalar pressure(dim);
 
             local_matrix = 0;
@@ -781,17 +781,14 @@ namespace darcy
     }
 
     {
-      const FEValuesExtractors::Vector velocity(0);
-      const FEValuesExtractors::Scalar pressure(dim);
-
       this->constraints.clear();
-      this->constraints.reinit(relevant_set);
+      this->constraints.reinit(relevant_set, relevant_set);
       DoFTools::make_hanging_node_constraints(this->dof_handler,
                                               this->constraints);
       this->constraints.close();
 
       this->preconditioner_constraints.clear();
-      this->preconditioner_constraints.reinit(relevant_set);
+      this->preconditioner_constraints.reinit(relevant_set, relevant_set);
       DoFTools::make_hanging_node_constraints(this->dof_handler,
                                               this->preconditioner_constraints);
 
@@ -809,7 +806,7 @@ namespace darcy
   }
 
   template <typename MatrixType>
-  class TransposeOperator : public Subscriptor
+  class TransposeOperator : public EnableObserverPointer
   {
   public:
     TransposeOperator(const MatrixType &matrix)
@@ -883,7 +880,7 @@ namespace darcy
     SolverControl solver_control_system(this->system_matrix.m(),
                                         1.0e-10 * this->system_rhs.l2_norm(),
                                         true,
-                                        1.0e-10);
+                                        true);
     solver_control_system.enable_history_data();
     solver_control_system.log_history(true);
     solver_control_system.log_result(true);
