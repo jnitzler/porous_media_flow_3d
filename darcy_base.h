@@ -134,8 +134,7 @@ namespace darcy
     // Input methods
     // -------------------------------------------------------------------------
     void
-    read_input_npy(
-      const std::string &input_path); // Read random field from .npy
+    read_input_npy(); // Read random field from .npy
     void
     generate_ref_input(); // Generate test random field
     void
@@ -260,7 +259,7 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyBase<dim>::read_input_npy(const std::string &filename)
+  DarcyBase<dim>::read_input_npy()
   {
     TimerOutput::Scope timer_section(this->computing_timer, "   Read Inputs");
 
@@ -268,10 +267,10 @@ namespace darcy
     bool                       fortran_order{};
 
     std::vector<double> x_std_vec;
-    npy::LoadArrayFromNumpy(filename, shape, fortran_order, x_std_vec);
+    npy::LoadArrayFromNumpy(this->params.input_npy_file, shape, fortran_order, x_std_vec);
 
     const unsigned int n_dofs_rf = this->rf_dof_handler.n_dofs();
-    this->pcout << "Read in random field from file: " << filename << std::endl;
+    this->pcout << "Read in random field from file: " << this->params.input_npy_file << std::endl;
     this->pcout << "Number of random field dofs: " << n_dofs_rf << std::endl;
     this->pcout << "Number of input field dofs: " << x_std_vec.size()
                 << std::endl;

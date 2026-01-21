@@ -398,7 +398,7 @@ namespace darcy
                                         relevant_partitioning,
                                         MPI_COMM_WORLD);
 
-    this->read_input_npy(this->params.input_npy_file);
+    this->read_input_npy();
     this->generate_coordinates();
     read_upstream_gradient_npy(adjoint_data_path.string());
     read_primary_solution();

@@ -260,7 +260,7 @@ namespace darcy
   DarcyForward<dim>::run_simulation()
   {
     this->setup_grid_and_dofs();
-    this->read_input_npy(this->params.input_npy_file);
+    this->read_input_npy();
     // this->generate_ref_input(); // TODO: should be removed in production
     this->generate_coordinates();
     this->assemble_approx_schur_complement();
