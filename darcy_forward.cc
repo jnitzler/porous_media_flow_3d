@@ -1,7 +1,8 @@
 #include "darcy_forward.h"
-#include "parameters.h"
 
 #include <filesystem>
+
+#include "parameters.h"
 
 // Explicit template instantiation
 template class darcy::DarcyForward<3>;
@@ -20,8 +21,8 @@ main(int argc, char *argv[])
         {
           std::cerr << "Usage: " << argv[0] << " <parameter_file.json>"
                     << std::endl;
-          std::cerr << "Example: mpirun -np 4 " << argv[0]
-                    << " parameters.json" << std::endl;
+          std::cerr << "Example: mpirun -np 4 " << argv[0] << " parameters.json"
+                    << std::endl;
           return 1;
         }
 
@@ -43,8 +44,7 @@ main(int argc, char *argv[])
         }
       catch (const std::exception &exc)
         {
-          std::cerr << "Error parsing parameter file: " << argv[1]
-                    << std::endl;
+          std::cerr << "Error parsing parameter file: " << argv[1] << std::endl;
           std::cerr << exc.what() << std::endl;
           return 1;
         }
@@ -55,7 +55,7 @@ main(int argc, char *argv[])
       std::filesystem::create_directories(params.output_directory);
 
       // Run forward solver
-      DarcyForward<3>    mixed_laplace_problem(params.fe_degree);
+      DarcyForward<3> mixed_laplace_problem(params.fe_degree);
       mixed_laplace_problem.run(params);
     }
   catch (std::exception &exc)
