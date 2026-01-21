@@ -1,6 +1,8 @@
 {
   "Discretization": {
-    "pressure fe degree": 1
+    "pressure fe degree": 1,
+    "refinement level": 4,
+    "refinement level obs": 3
   },
   "Input/Output": {
     "input npy file": "input/markov_field_5.npy",

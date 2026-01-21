@@ -25,6 +25,9 @@ such that $\boldsymbol{x}$ can be inferred without constraints.
 
 ## Configuration
 The executables use deal.II's `ParameterHandler` to read configuration from a JSON or PRM file. The parameter file specifies:
+- `pressure fe degree`: Polynomial degree of the finite element basis functions for pressure (e.g., 1 for linear elements, 2 for quadratic)
+- `refinement level`: Global refinement level for the main triangulation (default: 4)
+- `refinement level obs`: Global refinement level for the observation triangulation (default: 3)
 - `input npy file`: Path to the input npy file containing random field coefficients
 - `output directory`: Path to the output directory for results
 - `output prefix`: Prefix for output filenames (e.g., 'run1_' or 'test_')
@@ -33,6 +36,11 @@ The executables use deal.II's `ParameterHandler` to read configuration from a JS
 Example JSON configuration (`parameters.json`):
 ```json
 {
+  "Discretization": {
+    "pressure fe degree": 1,
+    "refinement level": 4,
+    "refinement level obs": 3
+  },
   "Input/Output": {
     "input npy file": "input/markov_field_5.npy",
     "output directory": "output",
@@ -44,6 +52,12 @@ Example JSON configuration (`parameters.json`):
 
 Alternatively, you can use the PRM format (`parameters.prm`):
 ```prm
+subsection Discretization
+  set pressure fe degree = 1
+  set refinement level = 4
+  set refinement level obs = 3
+end
+
 subsection Input/Output
   set input npy file = input/markov_field_5.npy
   set output directory = output

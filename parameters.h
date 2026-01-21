@@ -21,6 +21,8 @@ namespace darcy
     std::string output_prefix;
     std::string adjoint_data_file;
     unsigned int fe_degree;
+    unsigned int refinement_level;
+    unsigned int refinement_level_obs;
 
     // Declare all parameters in the ParameterHandler
     static void
@@ -44,6 +46,16 @@ namespace darcy
                         "1",
                         dealii::Patterns::Integer(0),
                         "Polynomial degree of the pressure finite element");
+      
+      prm.declare_entry("refinement level",
+                        "4",
+                        dealii::Patterns::Integer(0),
+                        "Global refinement level for the main triangulation");
+      
+      prm.declare_entry("refinement level obs",
+                        "3",
+                        dealii::Patterns::Integer(0),
+                        "Global refinement level for the observation triangulation");
     }
     prm.leave_subsection();
 
@@ -81,6 +93,8 @@ namespace darcy
     prm.enter_subsection("Discretization");
     {
       fe_degree = prm.get_integer("pressure fe degree");
+      refinement_level = prm.get_integer("refinement level");
+      refinement_level_obs = prm.get_integer("refinement level obs");
     }
     prm.leave_subsection();
 

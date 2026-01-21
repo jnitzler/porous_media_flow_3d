@@ -1,3 +1,9 @@
+subsection Discretization
+  set pressure fe degree = 1
+  set refinement level = 4
+  set refinement level obs = 3
+end
+
 subsection Input/Output
   set input npy file = input/markov_field_5.npy
   set output directory = output

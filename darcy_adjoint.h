@@ -378,8 +378,6 @@ namespace darcy
     std::filesystem::path adjoint_data_path =
       input_path.parent_path() / this->params.adjoint_data_file;
 
-    this->setup_grid_and_dofs();
-
     const std::vector<types::global_dof_index> dofs_per_block =
       DoFTools::count_dofs_per_fe_block(this->dof_handler, {0, 0, 0, 1});
     const types::global_dof_index n_u = dofs_per_block[0],

@@ -720,9 +720,9 @@ namespace darcy
                                          inner_radius + 0.05,
                                          outer_radius - 0.05,
                                          n_cells);
-    this->triangulation_obs.refine_global(3);
+    this->triangulation_obs.refine_global(this->params.refinement_level_obs);
 
-    this->triangulation.refine_global(4);
+    this->triangulation.refine_global(this->params.refinement_level);
     this->dof_handler.distribute_dofs(this->fe);
     DoFRenumbering::Cuthill_McKee(this->dof_handler);
     DoFRenumbering::component_wise(this->dof_handler, block_component);
