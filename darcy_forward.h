@@ -96,9 +96,6 @@ namespace darcy
           }
         const std::string filename = this->params.output_directory + "/" +
                                      this->params.output_prefix + "sol.npy";
-        const std::string filename_coords = this->params.output_directory +
-                                            "/" + this->params.output_prefix +
-                                            "coords.npy";
         this->write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
