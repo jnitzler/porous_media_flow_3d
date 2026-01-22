@@ -22,6 +22,7 @@ namespace darcy
     std::string  output_prefix;
     std::string  adjoint_data_file;
     unsigned int fe_degree;
+    unsigned int degree_rf;
     unsigned int refinement_level;
     unsigned int refinement_level_obs;
 
@@ -47,6 +48,11 @@ namespace darcy
                         "1",
                         Patterns::Integer(0),
                         "Polynomial degree of the pressure finite element");
+
+      prm.declare_entry("random field fe degree",
+                        "2",
+                        Patterns::Integer(0),
+                        "Polynomial degree of the random field finite element");
 
       prm.declare_entry("refinement level",
                         "4",
@@ -96,6 +102,7 @@ namespace darcy
     prm.enter_subsection("Discretization");
     {
       fe_degree            = prm.get_integer("pressure fe degree");
+      degree_rf            = prm.get_integer("random field fe degree");
       refinement_level     = prm.get_integer("refinement level");
       refinement_level_obs = prm.get_integer("refinement level obs");
     }

@@ -1,6 +1,7 @@
 {
   "Discretization": {
     "pressure fe degree": 1,
+    "random field fe degree": 2,
     "refinement level": 4,
     "refinement level obs": 3
   },

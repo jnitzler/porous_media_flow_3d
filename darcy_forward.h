@@ -19,7 +19,8 @@ namespace darcy
   {
   public:
     // Constructor
-    explicit DarcyForward(const unsigned int degree_p);
+    explicit DarcyForward(const unsigned int degree_p,
+                          const unsigned int degree_rf);
 
     // Main entry point for forward simulation
     void
@@ -45,8 +46,9 @@ namespace darcy
 
   // Constructor implementation
   template <int dim>
-  DarcyForward<dim>::DarcyForward(const unsigned int degree_p)
-    : DarcyBase<dim>(degree_p)
+  DarcyForward<dim>::DarcyForward(const unsigned int degree_p,
+                                  const unsigned int degree_rf)
+    : DarcyBase<dim>(degree_p, degree_rf)
   {}
 
   // ===========================================================================
