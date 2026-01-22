@@ -21,7 +21,8 @@ namespace darcy
   {
   public:
     // Constructor
-    explicit DarcyAdjoint(const unsigned int degree_p);
+    explicit DarcyAdjoint(const unsigned int degree_p,
+                          const unsigned int degree_rf);
 
     // Main entry point for adjoint simulation
     void
@@ -88,8 +89,9 @@ namespace darcy
 
   // Constructor implementation
   template <int dim>
-  DarcyAdjoint<dim>::DarcyAdjoint(const unsigned int degree_p)
-    : DarcyBase<dim>(degree_p)
+  DarcyAdjoint<dim>::DarcyAdjoint(const unsigned int degree_p,
+                                  const unsigned int degree_rf)
+    : DarcyBase<dim>(degree_p, degree_rf)
   {}
 
   // ========================================================================
