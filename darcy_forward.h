@@ -63,12 +63,14 @@ namespace darcy
     TimerOutput::Scope timer_section(this->computing_timer,
                                      "   Remote point evaluation");
 
-    MappingQ<dim> dummy_mapping(2);
+    const MappingQ<dim> dummy_mapping(2);
 
     this->solution_distributed = this->solution;
 
-    // Use the old API that works correctly
-    Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(1.0e-9);
+    typename Utilities::MPI::RemotePointEvaluation<dim>::AdditionalData
+      eval_data;
+    eval_data.tolerance = 1.0e-9;
+    Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(eval_data);
     const auto                                 data_array =
       VectorTools::point_values<dim>(dummy_mapping,
                                      this->dof_handler,
@@ -98,7 +100,6 @@ namespace darcy
         this->write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
-
 
   // Write full solution (velocity + pressure) to "_solution_full.npy".
   // Gathers distributed solution to rank 0 using single MPI_Reduce.

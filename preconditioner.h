@@ -12,7 +12,7 @@
 #ifndef PRECONDITIONER_H
 #define PRECONDITIONER_H
 
-#include <deal.II/base/subscriptor.h>
+#include <deal.II/base/enable_observer_pointer.h>
 #include <deal.II/base/timer.h>
 #include <deal.II/lac/solver_cg.h>
 #include <deal.II/lac/solver_control.h>
@@ -30,7 +30,7 @@ namespace Preconditioner
   // Used as a building block in the Schur complement preconditioner.
   // ===========================================================================
   template <class MatrixType, class PreconditionerType>
-  class InverseMatrix : public Subscriptor
+  class InverseMatrix : public EnableObserverPointer
   {
   public:
     InverseMatrix(const MatrixType         &m,
@@ -92,7 +92,7 @@ namespace Preconditioner
   //   [ 0   -S  ] [ p ] = [ g ]
   // ===========================================================================
   template <class PreconditionerTypeaS, class PreconditionerTypeM>
-  class BlockSchurPreconditioner : public Subscriptor
+  class BlockSchurPreconditioner : public EnableObserverPointer
   {
   public:
     BlockSchurPreconditioner(const TrilinosWrappers::BlockSparseMatrix &System,

@@ -247,10 +247,8 @@ namespace darcy
     this->pcout << "Creating random field laplace operator..." << std::endl;
 
     const IndexSet locally_owned = this->rf_dof_handler.locally_owned_dofs();
-    IndexSet       locally_relevant;
-    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler,
-                                            locally_relevant);
-
+    const IndexSet locally_relevant =
+      DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler);
     AffineConstraints<double> rf_constraints;
     rf_constraints.clear();
     DoFTools::make_hanging_node_constraints(this->rf_dof_handler,
@@ -344,9 +342,8 @@ namespace darcy
     this->pcout << "Writing gradient to VTU file..." << std::endl;
 
     const IndexSet &locally_owned = this->rf_dof_handler.locally_owned_dofs();
-    IndexSet        locally_relevant;
-    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler,
-                                            locally_relevant);
+    const IndexSet  locally_relevant =
+      DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler);
 
     TrilinosWrappers::MPI::Vector gradient_owned(locally_owned, MPI_COMM_WORLD);
     TrilinosWrappers::MPI::Vector gradient_distributed(locally_owned,
