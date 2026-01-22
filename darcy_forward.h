@@ -23,26 +23,24 @@ namespace darcy
 
     // Main entry point for forward simulation
     void
-    run(const std::string &input_path, const std::string &output_path) override;
+    run(const Parameters &params) override;
 
   private:
     // -------------------------------------------------------------------------
     // Forward-specific output methods
     // -------------------------------------------------------------------------
     void
-    output_pvtu(const std::string &output_path) const; // VTU for ParaView
+    output_pvtu() const; // VTU for ParaView
     void
-    output_full_velocity_npy(
-      const std::string &output_path); // Full solution to .npy
+    output_full_velocity_npy(); // Full solution to .npy
     void
-    output_velocity_at_observation_points_npy(const std::string &output_path);
+    output_velocity_at_observation_points_npy();
 
     // -------------------------------------------------------------------------
     // Simulation driver
     // -------------------------------------------------------------------------
     void
-    run_simulation(const std::string &input_path,
-                   const std::string &output_path);
+    run_simulation();
   };
 
   // Constructor implementation
@@ -60,8 +58,7 @@ namespace darcy
   // Only rank 0 writes the file.
   template <int dim>
   void
-  DarcyForward<dim>::output_velocity_at_observation_points_npy(
-    const std::string &output_path)
+  DarcyForward<dim>::output_velocity_at_observation_points_npy()
   {
     TimerOutput::Scope timer_section(this->computing_timer,
                                      "   Remote point evaluation");
@@ -93,8 +90,11 @@ namespace darcy
                 output_data[d * n_points + i] = data_array[i][d];
               }
           }
-        const std::string filename        = output_path + "_sol.npy";
-        const std::string filename_coords = output_path + "_coords.npy";
+        const std::string filename = this->params.output_directory + "/" +
+                                     this->params.output_prefix + "sol.npy";
+        const std::string filename_coords = this->params.output_directory +
+                                            "/" + this->params.output_prefix +
+                                            "coords.npy";
         this->write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
@@ -105,7 +105,7 @@ namespace darcy
   // Only rank 0 writes the file.
   template <int dim>
   void
-  DarcyForward<dim>::output_full_velocity_npy(const std::string &output_path)
+  DarcyForward<dim>::output_full_velocity_npy()
   {
     TimerOutput::Scope timer_section(this->computing_timer,
                                      "   Output full solution npy");
@@ -144,7 +144,9 @@ namespace darcy
     // Write the gathered solution on rank 0
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        const std::string file_path = output_path + "_solution_full.npy";
+        const std::string file_path = this->params.output_directory + "/" +
+                                      this->params.output_prefix +
+                                      "solution_full.npy";
         this->pcout << "Writing full solution to file: " << file_path
                     << std::endl;
         this->pcout << "Size of full solution: " << full_solution.size()
@@ -162,11 +164,10 @@ namespace darcy
   // log_k and k.
   template <int dim>
   void
-  DarcyForward<dim>::output_pvtu(const std::string &output_path) const
+  DarcyForward<dim>::output_pvtu() const
   {
-    const std::size_t found    = output_path.find_last_of("/\\");
-    const std::string filename = output_path.substr(found + 1) + "_solution";
-    const std::string stripped_path = output_path.substr(0, found + 1);
+    const std::string filename      = this->params.output_prefix + "solution";
+    const std::string stripped_path = this->params.output_directory + "/";
 
     // define the solution vector
     std::vector<std::string> solution_names(dim, "u");
@@ -211,9 +212,8 @@ namespace darcy
     this->pcout << "Written pvtu for the solution!" << std::endl;
 
     // define the random field
-    const std::string filename_rf =
-      output_path.substr(found + 1) + "_random_field";
-    const std::string stripped_path_rf = output_path.substr(0, found + 1);
+    const std::string filename_rf = this->params.output_prefix + "random_field";
+    const std::string stripped_path_rf = this->params.output_directory + "/";
 
     DataOut<dim> data_out_rf;
     data_out_rf.set_flags(flags);
@@ -254,10 +254,10 @@ namespace darcy
   // Calls run_simulation and prints timing summary.
   template <int dim>
   void
-  DarcyForward<dim>::run(const std::string &input_path,
-                         const std::string &output_path)
+  DarcyForward<dim>::run(const Parameters &params)
   {
-    run_simulation(input_path, output_path);
+    this->params = params;
+    run_simulation();
 
     this->computing_timer.print_summary();
     this->computing_timer.reset();
@@ -268,11 +268,10 @@ namespace darcy
   // setup -> read input -> assemble -> solve -> output results.
   template <int dim>
   void
-  DarcyForward<dim>::run_simulation(const std::string &input_path,
-                                    const std::string &output_path)
+  DarcyForward<dim>::run_simulation()
   {
     this->setup_grid_and_dofs();
-    this->read_input_npy(input_path);
+    this->read_input_npy();
     // this->generate_ref_input(); // TODO: should be removed in production
     this->generate_coordinates();
     this->assemble_approx_schur_complement();
@@ -284,9 +283,9 @@ namespace darcy
     this->x_vec_distributed    = this->x_vec;
 
     // output the results
-    output_pvtu(output_path);
-    output_full_velocity_npy(output_path);
-    output_velocity_at_observation_points_npy(output_path);
+    output_pvtu();
+    output_full_velocity_npy();
+    output_velocity_at_observation_points_npy();
 
   } // end run simulation
 

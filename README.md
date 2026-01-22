@@ -22,16 +22,65 @@ The random isotropic permeability tensor $K(\boldsymbol{x})$ is modeled as follo
 $$K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$$
 
 such that $\boldsymbol{x}$ can be inferred without constraints.
-## Running the executables
-The executables require
-- a path to an input file
-- a path to the output directory
-- the adjoint executable requires additionally a file `adjoint_data.npy` which has to be located in the same directory as the input file.
 
-The primary problem can be started with `mpirun -np <num_procs> darcy_forward <path/to/test_input.npy> <path/to/output_dir>`. The associated adjoint problem with analogous with `mpirun -np <num_procs> darcy_adjoint <path/to/test_input.npy> <path/to/output_dir>`
+## Configuration
+The executables use deal.II's `ParameterHandler` to read configuration from a JSON or PRM file. The parameter file specifies:
+- `pressure fe degree`: Polynomial degree of the finite element basis functions for pressure (e.g., 1 for linear elements, 2 for quadratic)
+- `refinement level`: Global refinement level for the main triangulation (default: 4)
+- `refinement level obs`: Global refinement level for the observation triangulation (default: 3)
+- `input npy file`: Path to the input npy file containing random field coefficients
+- `output directory`: Path to the output directory for results
+- `output prefix`: Prefix for output filenames (e.g., 'run1_' or 'test_')
+- `adjoint data file`: Filename of the adjoint data npy file (assumed to be in the same directory as the input npy file, only used for adjoint problem)
+
+Example JSON configuration (`parameters.json`):
+```json
+{
+  "Discretization": {
+    "pressure fe degree": 1,
+    "refinement level": 4,
+    "refinement level obs": 3
+  },
+  "Input/Output": {
+    "input npy file": "input/markov_field_5.npy",
+    "output directory": "output",
+    "output prefix": "",
+    "adjoint data file": "adjoint_data.npy"
+  }
+}
+```
+
+Alternatively, you can use the PRM format (`parameters.prm`):
+```prm
+subsection Discretization
+  set pressure fe degree = 1
+  set refinement level = 4
+  set refinement level obs = 3
+end
+
+subsection Input/Output
+  set input npy file = input/markov_field_5.npy
+  set output directory = output
+  set output prefix = 
+  set adjoint data file = adjoint_data.npy
+end
+```
+
+## Running the executables
+The primary problem can be started with:
+```bash
+mpirun -np <num_procs> darcy_forward parameters.json
+```
+
+The associated adjoint problem:
+```bash
+mpirun -np <num_procs> darcy_adjoint parameters.json
+```
+
+Note: The `adjoint_data.npy` file should be located in the same directory as the input npy file specified in the parameter file.
 
 ## Setup, installation and dependencies
-This code requires the installation and setup of [deal.ii](https://www.dealii.org/), furthermore, the [Trilinos](https://trilinos.github.io/) project needs to be configured and installed. For parallel computing, respectively partitioning we furthermore require the installation of 
+This code requires the installation and setup of [deal.II](https://www.dealii.org/), furthermore, the [Trilinos](https://trilinos.github.io/) project needs to be configured and installed. For parallel computing, respectively partitioning we furthermore require the installation of 
 [p4est](pymc.io/projects/examples/en/latest/gallery.html). The implementation of the [random fields is a separate project](https://gitlab.lrz.de/adjoint_problems/random_fields) that needs to be downloaded. The import path for the respective header file might need to be adjusted in the source code.
-## Associated deal.ii tutorials
-The code is largely based on the deal.ii [tutorial 20](https://www.dealii.org/developer/doxygen/deal.II/step_20.html) for the overall idea, [tutorials 21](https://www.dealii.org/developer/doxygen/deal.II/step_21.html) and [22](https://www.dealii.org/developer/doxygen/deal.II/step_22.html) for handling block systems and further enhanced solution strategies. We furthermore used [tutorial 43](https://www.dealii.org/developer/doxygen/deal.II/step_43.html) for improved solvers and an efficient block-preconditioner. Finally, [tutorials 31](https://www.dealii.org/developer/doxygen/deal.II/step_31.html) and [32](https://www.dealii.org/developer/doxygen/deal.II/step_32.html) were used to parallelize the code for use on multiple processors.
+## Associated deal.II tutorials
+The code is largely based on the deal.II [tutorial 20](https://www.dealii.org/developer/doxygen/deal.II/step_20.html) for the overall idea, [tutorials 21](https://www.dealii.org/developer/doxygen/deal.II/step_21.html) and [22](https://www.dealii.org/developer/doxygen/deal.II/step_22.html) for handling block systems and further enhanced solution strategies. We furthermore used [tutorial 43](https://www.dealii.org/developer/doxygen/deal.II/step_43.html) for improved solvers and an efficient block-preconditioner. Finally, [tutorials 31](https://www.dealii.org/developer/doxygen/deal.II/step_31.html) and [32](https://www.dealii.org/developer/doxygen/deal.II/step_32.html) were used to parallelize the code for use on multiple processors.

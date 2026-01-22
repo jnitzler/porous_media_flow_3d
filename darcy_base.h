@@ -70,6 +70,7 @@
 #include "npy.hpp"
 
 // === Local helpers ===
+#include "parameters.h"
 #include "preconditioner.h"
 #include "random_permeability.h"
 
@@ -97,7 +98,7 @@ namespace darcy
     // Main entry point for simulation (pure virtual - implemented by derived
     // classes)
     virtual void
-    run(const std::string &input_path, const std::string &output_path) = 0;
+    run(const Parameters &params) = 0;
 
     // Virtual destructor for proper cleanup
     virtual ~DarcyBase() = default;
@@ -134,8 +135,7 @@ namespace darcy
     // Input methods
     // -------------------------------------------------------------------------
     void
-    read_input_npy(
-      const std::string &input_path); // Read random field from .npy
+    read_input_npy(); // Read random field from .npy
     void
     generate_ref_input(); // Generate test random field
     void
@@ -203,6 +203,9 @@ namespace darcy
     // --- I/O and timing ---
     ConditionalOStream pcout;           // Only rank 0 prints
     TimerOutput        computing_timer; // Performance profiling
+
+    // --- Simulation parameters ---
+    Parameters params; // Configuration parameters
   };
 
 } // namespace darcy
@@ -257,7 +260,7 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyBase<dim>::read_input_npy(const std::string &filename)
+  DarcyBase<dim>::read_input_npy()
   {
     TimerOutput::Scope timer_section(this->computing_timer, "   Read Inputs");
 
@@ -265,10 +268,14 @@ namespace darcy
     bool                       fortran_order{};
 
     std::vector<double> x_std_vec;
-    npy::LoadArrayFromNumpy(filename, shape, fortran_order, x_std_vec);
+    npy::LoadArrayFromNumpy(this->params.input_npy_file,
+                            shape,
+                            fortran_order,
+                            x_std_vec);
 
     const unsigned int n_dofs_rf = this->rf_dof_handler.n_dofs();
-    this->pcout << "Read in random field from file: " << filename << std::endl;
+    this->pcout << "Read in random field from file: "
+                << this->params.input_npy_file << std::endl;
     this->pcout << "Number of random field dofs: " << n_dofs_rf << std::endl;
     this->pcout << "Number of input field dofs: " << x_std_vec.size()
                 << std::endl;
@@ -724,9 +731,9 @@ namespace darcy
                                          inner_radius + 0.05,
                                          outer_radius - 0.05,
                                          n_cells);
-    this->triangulation_obs.refine_global(3);
+    this->triangulation_obs.refine_global(this->params.refinement_level_obs);
 
-    this->triangulation.refine_global(4);
+    this->triangulation.refine_global(this->params.refinement_level);
     this->dof_handler.distribute_dofs(this->fe);
     DoFRenumbering::Cuthill_McKee(this->dof_handler);
     DoFRenumbering::component_wise(this->dof_handler, block_component);
@@ -874,11 +881,10 @@ namespace darcy
                 << ", rel_reduction=" << rel_reduction
                 << ", RHS norm=" << rhs_norm << std::endl;
 
-    dealii::SolverControl solver_control_system(this->system_matrix.m(),
-                                                1.0e-10 *
-                                                  this->system_rhs.l2_norm(),
-                                                true,
-                                                1.0e-10);
+    SolverControl solver_control_system(this->system_matrix.m(),
+                                        1.0e-10 * this->system_rhs.l2_norm(),
+                                        true,
+                                        1.0e-10);
     solver_control_system.enable_history_data();
     solver_control_system.log_history(true);
     solver_control_system.log_result(true);

@@ -7,6 +7,7 @@
 
 #include <deal.II/fe/mapping_q.h>
 #include <deal.II/numerics/matrix_tools.h>
+#include <filesystem>
 
 #include "darcy_base.h"
 
@@ -24,15 +25,14 @@ namespace darcy
 
     // Main entry point for adjoint simulation
     void
-    run(const std::string &input_path, const std::string &output_path) override;
+    run(const Parameters &params) override;
 
   private:
     // -------------------------------------------------------------------------
     // Adjoint-specific input methods
     // -------------------------------------------------------------------------
     void
-    read_primary_solution(
-      const std::string &input_path); // Load forward solution
+    read_primary_solution(); // Load forward solution
     void
     read_upstream_gradient_npy(
       const std::string &input_file_path); // Load dL/dy
@@ -53,18 +53,17 @@ namespace darcy
     // Adjoint-specific output methods
     // -------------------------------------------------------------------------
     void
-    write_adjoint_solution_pvtu(const std::string &output_path);
+    write_adjoint_solution_pvtu();
     void
-    output_gradient_pvtu(const std::string &output_path);
+    output_gradient_pvtu();
     void
-    write_gradient_to_npy(const std::string &output_path);
+    write_gradient_to_npy();
 
     // -------------------------------------------------------------------------
     // Simulation driver
     // -------------------------------------------------------------------------
     void
-    run_simulation(const std::string &input_path,
-                   const std::string &output_path);
+    run_simulation();
 
     // =========================================================================
     // Adjoint-specific member variables
@@ -99,9 +98,10 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::read_upstream_gradient_npy(const std::string &input_file_path)
+  DarcyAdjoint<dim>::read_upstream_gradient_npy(
+    const std::string &input_file_path)
   {
-    TimerOutput::Scope timing_section(this->computing_timer,
+    TimerOutput::Scope    timing_section(this->computing_timer,
                                       "read upstream gradient npy");
     std::filesystem::path my_path(input_file_path);
     std::filesystem::path base_dir = my_path.parent_path();
@@ -135,20 +135,24 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::read_primary_solution(const std::string &output_path)
+  DarcyAdjoint<dim>::read_primary_solution()
   {
-    dealii::TimerOutput::Scope timing_section(this->computing_timer,
-                                              "read primary solution npy");
+    TimerOutput::Scope         timing_section(this->computing_timer,
+                                      "read primary solution npy");
     std::vector<unsigned long> shape{};
     bool                       fortran_order;
 
-    std::string file_path = output_path + "_solution_full.npy";
+    std::string file_path = this->params.output_directory + "/" +
+                            this->params.output_prefix + "solution_full.npy";
     this->pcout << "Reading primary solution from " << file_path << std::endl;
 
     std::vector<double> tmp_primary_solution;
     tmp_primary_solution.resize(this->dof_handler.n_dofs());
 
-    npy::LoadArrayFromNumpy(file_path, shape, fortran_order, tmp_primary_solution);
+    npy::LoadArrayFromNumpy(file_path,
+                            shape,
+                            fortran_order,
+                            tmp_primary_solution);
 
     this->pcout << "Primary solution read successfully!" << std::endl;
     this->pcout << "Writing primary solution to distributed solution vector..."
@@ -168,16 +172,18 @@ namespace darcy
   void
   DarcyAdjoint<dim>::overwrite_adjoint_rhs()
   {
-    TimerOutput::Scope timing_section(this->computing_timer, "Overwrite adjoint rhs");
+    TimerOutput::Scope timing_section(this->computing_timer,
+                                      "Overwrite adjoint rhs");
 
-    this->system_rhs                                         = 0;
-    const unsigned int                   dofs_per_cell = this->fe.n_dofs_per_cell();
-    MappingQ<dim>                        dummy_mapping(2);
+    this->system_rhs                 = 0;
+    const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
+    MappingQ<dim>      dummy_mapping(2);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
 
     for (const auto &cell_tria : this->triangulation.active_cell_iterators())
       {
-        const auto &cell = cell_tria->as_dof_handler_iterator(this->dof_handler);
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
         if (cell->is_locally_owned())
           {
             cell->get_dof_indices(local_dof_indices);
@@ -203,7 +209,8 @@ namespace darcy
 
                     const double shape_value =
                       this->fe.shape_value(i, current_cell_point);
-                    const double grad_log_lik = data_vec[data_element_idx[k]][comp];
+                    const double grad_log_lik =
+                      data_vec[data_element_idx[k]][comp];
 
                     this->system_rhs(local_dof_indices[i]) +=
                       grad_log_lik * shape_value;
@@ -213,14 +220,16 @@ namespace darcy
       }
     this->system_rhs.compress(VectorOperation::add);
     this->pcout << "Successfully overwritten rhs..." << std::endl;
-    this->pcout << "Adjoint rhs norm: " << this->system_rhs.l2_norm() << std::endl;
+    this->pcout << "Adjoint rhs norm: " << this->system_rhs.l2_norm()
+                << std::endl;
   }
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::run(const std::string &input_path, const std::string &output_path)
+  DarcyAdjoint<dim>::run(const Parameters &params)
   {
-    run_simulation(input_path, output_path);
+    this->params = params;
+    run_simulation();
 
     this->pcout << "Adjoint problem solved successfully!" << std::endl;
     this->computing_timer.print_summary();
@@ -239,11 +248,13 @@ namespace darcy
 
     const IndexSet locally_owned = this->rf_dof_handler.locally_owned_dofs();
     IndexSet       locally_relevant;
-    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler, locally_relevant);
+    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler,
+                                            locally_relevant);
 
     AffineConstraints<double> rf_constraints;
     rf_constraints.clear();
-    DoFTools::make_hanging_node_constraints(this->rf_dof_handler, rf_constraints);
+    DoFTools::make_hanging_node_constraints(this->rf_dof_handler,
+                                            rf_constraints);
     rf_constraints.close();
 
     TrilinosWrappers::SparsityPattern sp_rf(locally_owned,
@@ -267,7 +278,7 @@ namespace darcy
     const QGauss<dim> quadrature(this->degree_u + 1);
     MappingQ<dim>     mapping(2);
 
-    const dealii::Function<dim, double> *coefficient = nullptr;
+    const Function<dim, double> *coefficient = nullptr;
     MatrixCreator::create_laplace_matrix(mapping,
                                          this->rf_dof_handler,
                                          quadrature,
@@ -277,12 +288,12 @@ namespace darcy
 
     TrilinosWrappers::SparseMatrix rf_mass_matrix(sp_rf);
 
-    dealii::MatrixCreator::create_mass_matrix(mapping,
-                                              this->rf_dof_handler,
-                                              quadrature,
-                                              rf_mass_matrix,
-                                              coefficient,
-                                              rf_constraints);
+    MatrixCreator::create_mass_matrix(mapping,
+                                      this->rf_dof_handler,
+                                      quadrature,
+                                      rf_mass_matrix,
+                                      coefficient,
+                                      rf_constraints);
 
     const double epsilon = 1e-5;
     this->rf_laplace_matrix.add(epsilon, rf_mass_matrix);
@@ -294,7 +305,7 @@ namespace darcy
   {
     const double a = 1e-9 + this->rf_dof_handler.n_dofs() / 2.0;
 
-    const IndexSet               &owned = this->rf_dof_handler.locally_owned_dofs();
+    const IndexSet &owned = this->rf_dof_handler.locally_owned_dofs();
     TrilinosWrappers::MPI::Vector x_minus_mean, prior_grad;
     x_minus_mean.reinit(owned, MPI_COMM_WORLD);
     prior_grad.reinit(owned, MPI_COMM_WORLD);
@@ -326,14 +337,16 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::output_gradient_pvtu(const std::string &output_path)
+  DarcyAdjoint<dim>::output_gradient_pvtu()
   {
-    TimerOutput::Scope timing_section(this->computing_timer, "Output gradient VTU");
+    TimerOutput::Scope timing_section(this->computing_timer,
+                                      "Output gradient VTU");
     this->pcout << "Writing gradient to VTU file..." << std::endl;
 
     const IndexSet &locally_owned = this->rf_dof_handler.locally_owned_dofs();
     IndexSet        locally_relevant;
-    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler, locally_relevant);
+    DoFTools::extract_locally_relevant_dofs(this->rf_dof_handler,
+                                            locally_relevant);
 
     TrilinosWrappers::MPI::Vector gradient_owned(locally_owned, MPI_COMM_WORLD);
     TrilinosWrappers::MPI::Vector gradient_distributed(locally_owned,
@@ -352,9 +365,8 @@ namespace darcy
     MappingQ<dim> mapping(2);
     data_out.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
 
-    const std::size_t found    = output_path.find_last_of("/\\");
-    const std::string filename = output_path.substr(found + 1) + "_gradient";
-    const std::string stripped_path = output_path.substr(0, found + 1);
+    const std::string filename      = this->params.output_prefix + "gradient";
+    const std::string stripped_path = this->params.output_directory + "/";
 
     data_out.write_vtu_with_pvtu_record(
       stripped_path, filename, 0, MPI_COMM_WORLD, 1, 1);
@@ -365,12 +377,17 @@ namespace darcy
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::run_simulation(const std::string &input_path,
-                                    const std::string &output_path)
+  DarcyAdjoint<dim>::run_simulation()
   {
     const bool adjoint_solve = true;
 
     this->setup_grid_and_dofs();
+
+    // Construct full path to adjoint data file
+    // (assumed to be in same directory as input npy file)
+    std::filesystem::path input_path(this->params.input_npy_file);
+    std::filesystem::path adjoint_data_path =
+      input_path.parent_path() / this->params.adjoint_data_file;
 
     const std::vector<types::global_dof_index> dofs_per_block =
       DoFTools::count_dofs_per_fe_block(this->dof_handler, {0, 0, 0, 1});
@@ -392,10 +409,10 @@ namespace darcy
                                         relevant_partitioning,
                                         MPI_COMM_WORLD);
 
-    this->read_input_npy(input_path);
+    this->read_input_npy();
     this->generate_coordinates();
-    read_upstream_gradient_npy(input_path);
-    read_primary_solution(output_path);
+    read_upstream_gradient_npy(adjoint_data_path.string());
+    read_primary_solution();
     this->assemble_approx_schur_complement();
     this->assemble_system();
     overwrite_adjoint_rhs();
@@ -403,29 +420,31 @@ namespace darcy
     final_inner_adjoint_product();
     create_rf_laplace_operator();
     add_prior_gradient_to_adjoint();
-    write_gradient_to_npy(output_path);
+    write_gradient_to_npy();
+    output_gradient_pvtu();
+    write_adjoint_solution_pvtu();
   }
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::write_gradient_to_npy(const std::string &output_path)
+  DarcyAdjoint<dim>::write_gradient_to_npy()
   {
     unsigned int rows    = grad_log_lik_x.size();
     unsigned int columns = 1;
 
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        const std::string filename = output_path + "_grad_solution.npy";
+        const std::string filename = this->params.output_directory + "/" +
+                                     this->params.output_prefix +
+                                     "grad_solution.npy";
         this->write_data_to_npy(filename, grad_log_lik_x, rows, columns);
       }
   }
 
   template <int dim>
   void
-  DarcyAdjoint<dim>::write_adjoint_solution_pvtu(const std::string &output_path)
+  DarcyAdjoint<dim>::write_adjoint_solution_pvtu()
   {
-    this->solution_distributed = this->solution;
-
     std::vector<std::string> solution_names(dim, "adjoint_velocity");
     solution_names.emplace_back("adjoint_pressure");
 
@@ -445,12 +464,13 @@ namespace darcy
                              interpretation);
 
     MappingQ<dim> mapping(2);
-    data_out.build_patches(mapping, this->degree_u, DataOut<dim>::curved_inner_cells);
+    data_out.build_patches(mapping,
+                           this->degree_u,
+                           DataOut<dim>::curved_inner_cells);
 
-    const std::size_t found = output_path.find_last_of("/\\");
     const std::string filename =
-      output_path.substr(found + 1) + "_adjoint_solution";
-    const std::string stripped_path = output_path.substr(0, found + 1);
+      this->params.output_prefix + "adjoint_solution";
+    const std::string stripped_path = this->params.output_directory + "/";
 
     constexpr unsigned int n_digits_counter = 2;
     constexpr unsigned int num_vtu_files    = 1;
@@ -484,20 +504,19 @@ namespace darcy
 
     const QGauss<dim> quadrature(this->degree_u + 1);
 
-    FEValues<dim> fe_values(mapping,
+    FEValues<dim>      fe_values(mapping,
                             this->fe,
                             quadrature,
                             update_values | update_JxW_values);
-    FEValues<dim> fe_rf_values(mapping,
+    FEValues<dim>      fe_rf_values(mapping,
                                this->rf_fe_system,
                                quadrature,
                                update_values);
     const unsigned int n_q_points = fe_values.n_quadrature_points;
 
     FEValuesExtractors::Vector velocities(0);
-    const unsigned int         dofs_per_cell   = this->fe.n_dofs_per_cell();
-    const unsigned int         rf_dofs_per_cell =
-      this->rf_fe_system.n_dofs_per_cell();
+    const unsigned int         dofs_per_cell = this->fe.n_dofs_per_cell();
+    const unsigned int rf_dofs_per_cell = this->rf_fe_system.n_dofs_per_cell();
 
     std::vector<types::global_dof_index> local_rf_dof_indices(rf_dofs_per_cell);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
@@ -509,12 +528,13 @@ namespace darcy
     std::vector<Tensor<1, dim>> velocity_primary_q(n_q_points);
     std::vector<double>         local_gradient(rf_dofs_per_cell);
 
-    this->solution_distributed = this->solution;
+    this->solution_distributed   = this->solution;
     solution_primary_distributed = solution_primary_problem;
 
     for (const auto &cell_tria : this->triangulation.active_cell_iterators())
       {
-        const auto &cell = cell_tria->as_dof_handler_iterator(this->dof_handler);
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
         const auto &rf_cell =
           cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
 
@@ -530,7 +550,8 @@ namespace darcy
 
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
               {
-                solution_local[i] = this->solution_distributed[local_dof_indices[i]];
+                solution_local[i] =
+                  this->solution_distributed[local_dof_indices[i]];
                 solution_primary_local[i] =
                   solution_primary_distributed[local_dof_indices[i]];
               }
@@ -544,7 +565,8 @@ namespace darcy
                     const Tensor<1, dim> phi_i_u =
                       fe_values[velocities].value(i, q);
                     velocity_adjoint_q[q] += solution_local[i] * phi_i_u;
-                    velocity_primary_q[q] += solution_primary_local[i] * phi_i_u;
+                    velocity_primary_q[q] +=
+                      solution_primary_local[i] * phi_i_u;
                   }
               }
 
@@ -571,7 +593,8 @@ namespace darcy
                 local_gradient[k];
           }
       }
-    this->pcout << "grad_log_x (distributed) successfully assembled!" << std::endl;
+    this->pcout << "grad_log_x (distributed) successfully assembled!"
+                << std::endl;
   }
 
 } // namespace darcy

@@ -1,0 +1,23 @@
+name: Check clang-format
+
+on:
+  push:
+    branches: [ main, parameter_file ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Run clang-format lint
+      uses: DoozyX/clang-format-lint-action@v0.16.2
+      with:
+        source: '.'
+        extensions: 'h,cc'
+        clangFormatVersion: 16
+        style: file
