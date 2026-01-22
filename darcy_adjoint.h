@@ -309,7 +309,7 @@ namespace darcy
     prior_grad.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
-      x_minus_mean[idx] = this->x_vec[idx];
+      x_minus_mean[idx] = this->x_vec_distributed[idx];
     x_minus_mean.compress(VectorOperation::insert);
 
     x_minus_mean.add(-1.0, this->mean_rf);
