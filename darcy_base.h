@@ -249,7 +249,7 @@ namespace darcy
     , triangulation_obs()
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
-    , rf_fe_system(FE_Q<dim>(1), 1)
+    , rf_fe_system(FE_Q<dim>(2), 1)
     , rf_dof_handler(triangulation)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
@@ -739,6 +739,7 @@ namespace darcy
     DoFRenumbering::component_wise(this->dof_handler, block_component);
 
     this->rf_dof_handler.distribute_dofs(this->rf_fe_system);
+    DoFRenumbering::Cuthill_McKee(this->rf_dof_handler);
 
     this->rf_locally_owned = this->rf_dof_handler.locally_owned_dofs();
     this->rf_locally_relevant =

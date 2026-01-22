@@ -245,7 +245,7 @@ namespace darcy
     // NOTE: In ParaView, keep "Nonlinear Subdivision Level" at 0 to avoid
     // artifacts - ParaView's subdivision algorithm doesn't match FEM
     // interpolation.
-    data_out_rf.build_patches(mapping, 1, DataOut<dim>::curved_inner_cells);
+    data_out_rf.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
     data_out_rf.write_vtu_with_pvtu_record(
       stripped_path_rf, filename_rf, cycle, MPI_COMM_WORLD, n_digits_counter);
   }
