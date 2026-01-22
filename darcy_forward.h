@@ -72,11 +72,12 @@ namespace darcy
 
     // Use the old API that works correctly
     Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(1.0e-9);
-    const auto data_array = VectorTools::point_values<dim>(dummy_mapping,
-                                                           this->dof_handler,
-                                                           this->solution_distributed,
-                                                           this->spatial_coordinates,
-                                                           evaluation_cache);
+    const auto                                 data_array =
+      VectorTools::point_values<dim>(dummy_mapping,
+                                     this->dof_handler,
+                                     this->solution_distributed,
+                                     this->spatial_coordinates,
+                                     evaluation_cache);
 
     // Only rank 0 writes the output file
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
@@ -144,10 +145,15 @@ namespace darcy
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
         const std::string file_path = output_path + "_solution_full.npy";
-        this->pcout << "Writing full solution to file: " << file_path << std::endl;
-        this->pcout << "Size of full solution: " << full_solution.size() << std::endl;
+        this->pcout << "Writing full solution to file: " << file_path
+                    << std::endl;
+        this->pcout << "Size of full solution: " << full_solution.size()
+                    << std::endl;
         this->pcout << "Number of dofs: " << n_dofs << std::endl;
-        this->write_data_to_npy(file_path, full_solution, full_solution.size(), 1);
+        this->write_data_to_npy(file_path,
+                                full_solution,
+                                full_solution.size(),
+                                1);
       }
   }
 
@@ -192,7 +198,9 @@ namespace darcy
 
     // build the patches
     MappingQ<dim> mapping(2); // nonlinear mapping
-    data_out.build_patches(mapping, this->degree_u, DataOut<dim>::curved_inner_cells);
+    data_out.build_patches(mapping,
+                           this->degree_u,
+                           DataOut<dim>::curved_inner_cells);
 
     constexpr unsigned int n_digits_counter = 2;
     constexpr unsigned int cycle = 0; // a counter for iterative output
@@ -218,7 +226,8 @@ namespace darcy
 
     // Also output the exponentiated field k = exp(x_vec)
     // Create an owned-only vector, fill it, then assign to ghosted vector
-    TrilinosWrappers::MPI::Vector rf_owned(this->rf_locally_owned, MPI_COMM_WORLD);
+    TrilinosWrappers::MPI::Vector rf_owned(this->rf_locally_owned,
+                                           MPI_COMM_WORLD);
     for (const auto i : this->rf_locally_owned)
       rf_owned[i] = std::exp(this->x_vec_distributed[i]);
     rf_owned.compress(VectorOperation::insert);
@@ -236,7 +245,7 @@ namespace darcy
     // NOTE: In ParaView, keep "Nonlinear Subdivision Level" at 0 to avoid
     // artifacts - ParaView's subdivision algorithm doesn't match FEM
     // interpolation.
-    data_out_rf.build_patches(mapping, 1, DataOut<dim>::curved_inner_cells);
+    data_out_rf.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
     data_out_rf.write_vtu_with_pvtu_record(
       stripped_path_rf, filename_rf, cycle, MPI_COMM_WORLD, n_digits_counter);
   }
@@ -245,7 +254,8 @@ namespace darcy
   // Calls run_simulation and prints timing summary.
   template <int dim>
   void
-  DarcyForward<dim>::run(const std::string &input_path, const std::string &output_path)
+  DarcyForward<dim>::run(const std::string &input_path,
+                         const std::string &output_path)
   {
     run_simulation(input_path, output_path);
 
