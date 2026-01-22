@@ -498,6 +498,8 @@ namespace darcy
 
     grad_log_lik_x.assign(x_dim, 0.0);
     grad_log_lik_x_distributed.assign(x_dim, 0.0);
+    this->x_vec_distributed = this->x_vec; // Ensure distributed x_vec is set
+
 
     const MappingQ<dim> mapping(2);
 
