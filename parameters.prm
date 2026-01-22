@@ -1,5 +1,6 @@
 subsection Discretization
   set pressure fe degree = 1
+  set random field fe degree = 2
   set refinement level = 4
   set refinement level obs = 3
 end

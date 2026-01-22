@@ -94,7 +94,8 @@ namespace darcy
   public:
     // Constructor: degree_p is the polynomial degree for pressure (velocity =
     // degree_p + 1)
-    explicit DarcyBase(const unsigned int degree_p);
+    explicit DarcyBase(const unsigned int degree_p,
+                       const unsigned int degree_rf);
 
     // Main entry point for simulation (pure virtual - implemented by derived
     // classes)
@@ -156,8 +157,9 @@ namespace darcy
     // =========================================================================
 
     // --- Polynomial degrees ---
-    const unsigned int degree_p; // Pressure degree
-    const unsigned int degree_u; // Velocity degree (= degree_p + 1)
+    const unsigned int degree_p;  // Pressure degree
+    const unsigned int degree_u;  // Velocity degree (= degree_p + 1)
+    const unsigned int degree_rf; // Random field degree
 
     // --- Mesh ---
     parallel::distributed::Triangulation<dim>
@@ -240,9 +242,11 @@ namespace darcy
   }
 
   template <int dim>
-  DarcyBase<dim>::DarcyBase(const unsigned int degree_p)
+  DarcyBase<dim>::DarcyBase(const unsigned int degree_p,
+                            const unsigned int degree_rf)
     : degree_p(degree_p)
     , degree_u(degree_p + 1)
+    , degree_rf(degree_rf)
     , triangulation(MPI_COMM_WORLD,
                     typename Triangulation<dim>::MeshSmoothing(
                       Triangulation<dim>::smoothing_on_refinement |
@@ -250,7 +254,7 @@ namespace darcy
     , triangulation_obs()
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
-    , rf_fe_system(FE_Q<dim>(2), 1)
+    , rf_fe_system(FE_Q<dim>(degree_rf), 1)
     , rf_dof_handler(triangulation)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
