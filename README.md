@@ -5,7 +5,7 @@ This is a fully parallelized implementation of a Darcy flow PDE with a transvers
 $$
 \begin{align*}
 K^{-1} \boldsymbol{u} + \nabla p &= 0 \quad \text{in } \Omega \\
--\text{div} \, \boldsymbol{u} &= f \quad \text{in } \Omega \\
+-\text{div } \boldsymbol{u} &= f \quad \text{in } \Omega \\
 p &= g \quad \text{on } \partial\Omega
 \end{align*}
 $$
@@ -44,7 +44,7 @@ Example JSON configuration (`parameters.json`):
   "Input/Output": {
     "input npy file": "input/markov_field_5.npy",
     "output directory": "output",
-    "output prefix": "",
+    "output prefix": "my_sim_",
     "adjoint data file": "adjoint_data.npy"
   }
 }
@@ -80,7 +80,10 @@ mpirun -np <num_procs> darcy_adjoint parameters.json
 Note: The `adjoint_data.npy` file should be located in the same directory as the input npy file specified in the parameter file.
 
 ## Setup, installation and dependencies
+
 This code requires the installation and setup of [deal.II](https://www.dealii.org/), furthermore, the [Trilinos](https://trilinos.github.io/) project needs to be configured and installed. For parallel computing, respectively partitioning we furthermore require the installation of 
-[p4est](pymc.io/projects/examples/en/latest/gallery.html). The implementation of the [random fields is a separate project](https://gitlab.lrz.de/adjoint_problems/random_fields) that needs to be downloaded. The import path for the respective header file might need to be adjusted in the source code.
+[p4est](pymc.io/projects/examples/en/latest/gallery.html). 
+
 ## Associated deal.II tutorials
+
 The code is largely based on the deal.II [tutorial 20](https://www.dealii.org/developer/doxygen/deal.II/step_20.html) for the overall idea, [tutorials 21](https://www.dealii.org/developer/doxygen/deal.II/step_21.html) and [22](https://www.dealii.org/developer/doxygen/deal.II/step_22.html) for handling block systems and further enhanced solution strategies. We furthermore used [tutorial 43](https://www.dealii.org/developer/doxygen/deal.II/step_43.html) for improved solvers and an efficient block-preconditioner. Finally, [tutorials 31](https://www.dealii.org/developer/doxygen/deal.II/step_31.html) and [32](https://www.dealii.org/developer/doxygen/deal.II/step_32.html) were used to parallelize the code for use on multiple processors.
