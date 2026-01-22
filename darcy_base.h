@@ -94,7 +94,8 @@ namespace darcy
     // degree_p + 1)
     explicit DarcyBase(const unsigned int degree_p);
 
-    // Main entry point for simulation (pure virtual - implemented by derived classes)
+    // Main entry point for simulation (pure virtual - implemented by derived
+    // classes)
     virtual void
     run(const std::string &input_path, const std::string &output_path) = 0;
 
@@ -245,7 +246,7 @@ namespace darcy
     , triangulation_obs()
     , fe(FE_Q<dim>(degree_u), dim, FE_Q<dim>(degree_p), 1)
     , dof_handler(triangulation)
-    , rf_fe_system(FE_Q<dim>(1), 1)
+    , rf_fe_system(FE_Q<dim>(2), 1)
     , rf_dof_handler(triangulation)
     , pcout(std::cout, (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0))
     , computing_timer(MPI_COMM_WORLD,
@@ -272,7 +273,8 @@ namespace darcy
     this->pcout << "Number of input field dofs: " << x_std_vec.size()
                 << std::endl;
 
-    TrilinosWrappers::MPI::Vector x_owned(this->rf_locally_owned, MPI_COMM_WORLD);
+    TrilinosWrappers::MPI::Vector x_owned(this->rf_locally_owned,
+                                          MPI_COMM_WORLD);
     for (const auto i : this->rf_locally_owned)
       x_owned[i] = x_std_vec[i];
     x_owned.compress(VectorOperation::insert);
@@ -314,19 +316,19 @@ namespace darcy
 
     const MappingQ<dim> mapping(2);
 
-    FEValues<dim> fe_values(mapping,
+    FEValues<dim>      fe_values(mapping,
                             this->fe,
                             quadrature_formula,
                             update_JxW_values | update_values |
                               update_quadrature_points | update_gradients);
-    FEFaceValues<dim> fe_face_values(mapping,
+    FEFaceValues<dim>  fe_face_values(mapping,
                                      this->fe,
                                      face_quadrature_formula,
                                      update_values | update_gradients |
                                        update_normal_vectors |
                                        update_quadrature_points |
                                        update_JxW_values);
-    FEValues<dim> fe_rf_values(mapping,
+    FEValues<dim>      fe_rf_values(mapping,
                                this->rf_fe_system,
                                quadrature_formula,
                                update_values | update_quadrature_points);
@@ -339,7 +341,8 @@ namespace darcy
 
     for (const auto &cell_tria : this->triangulation.active_cell_iterators())
       {
-        const auto &cell = cell_tria->as_dof_handler_iterator(this->dof_handler);
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
         const auto &rf_cell =
           cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
 
@@ -358,7 +361,8 @@ namespace darcy
 
             std::vector<double> rf_values(n_q_points);
             Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(this->x_vec_distributed, rf_values);
+            fe_rf_values.get_function_values(this->x_vec_distributed,
+                                             rf_values);
 
             for (unsigned int q = 0; q < n_q_points; ++q)
               {
@@ -385,9 +389,9 @@ namespace darcy
                   {
                     fe_face_values.reinit(cell, face);
 
-                    const auto tau = 5. *
-                                     Utilities::fixed_power<2>(this->degree_p + 1) /
-                                     cell->diameter();
+                    const auto tau =
+                      5. * Utilities::fixed_power<2>(this->degree_p + 1) /
+                      cell->diameter();
 
                     for (unsigned int q = 0; q < n_face_q_points; ++q)
                       {
@@ -433,7 +437,8 @@ namespace darcy
   void
   DarcyBase<dim>::assemble_system()
   {
-    TimerOutput::Scope timer_section(this->computing_timer, "  Assemble system");
+    TimerOutput::Scope timer_section(this->computing_timer,
+                                     "  Assemble system");
     this->pcout << "Assemble system..." << std::endl;
 
     this->system_matrix = 0;
@@ -444,16 +449,16 @@ namespace darcy
 
     const MappingQ<dim> mapping(2);
 
-    FEValues<dim> fe_values(mapping,
+    FEValues<dim>      fe_values(mapping,
                             this->fe,
                             quadrature_formula,
                             update_values | update_quadrature_points |
                               update_JxW_values | update_gradients);
-    FEValues<dim> fe_rf_values(mapping,
+    FEValues<dim>      fe_rf_values(mapping,
                                this->rf_fe_system,
                                quadrature_formula,
                                update_values | update_quadrature_points);
-    FEFaceValues<dim> fe_face_values(mapping,
+    FEFaceValues<dim>  fe_face_values(mapping,
                                      this->fe,
                                      face_quadrature_formula,
                                      update_values | update_normal_vectors |
@@ -472,7 +477,8 @@ namespace darcy
 
     for (const auto &cell_tria : this->triangulation.active_cell_iterators())
       {
-        const auto &cell = cell_tria->as_dof_handler_iterator(this->dof_handler);
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
         const auto &rf_cell =
           cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
 
@@ -493,7 +499,8 @@ namespace darcy
 
             std::vector<double> rf_values(n_q_points);
             Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(this->x_vec_distributed, rf_values);
+            fe_rf_values.get_function_values(this->x_vec_distributed,
+                                             rf_values);
 
             for (unsigned int q = 0; q < n_q_points; ++q)
               {
@@ -542,10 +549,10 @@ namespace darcy
                             const double phi_i_p =
                               fe_face_values[pressure].value(i, q);
 
-                            local_rhs(i) += -(phi_i_u *
-                                              fe_face_values.normal_vector(q) *
-                                              boundary_values_pressure[q] *
-                                              fe_face_values.JxW(q));
+                            local_rhs(i) +=
+                              -(phi_i_u * fe_face_values.normal_vector(q) *
+                                boundary_values_pressure[q] *
+                                fe_face_values.JxW(q));
 
                             for (unsigned int j = 0; j < dofs_per_cell; ++j)
                               {
@@ -611,9 +618,9 @@ namespace darcy
     this->system_matrix.clear();
 
     TrilinosWrappers::BlockSparsityPattern sp(partitioning,
-                          partitioning,
-                          relevant_partitioning,
-                          MPI_COMM_WORLD);
+                                              partitioning,
+                                              relevant_partitioning,
+                                              MPI_COMM_WORLD);
 
     Table<2, DoFTools::Coupling> coupling(dim + 1, dim + 1);
     for (unsigned int c = 0; c < dim + 1; ++c)
@@ -682,7 +689,8 @@ namespace darcy
   void
   DarcyBase<dim>::setup_grid_and_dofs()
   {
-    TimerOutput::Scope timing_section(this->computing_timer, "Setup dof systems");
+    TimerOutput::Scope        timing_section(this->computing_timer,
+                                      "Setup dof systems");
     std::vector<unsigned int> block_component(dim + 1, 0);
     block_component[dim] = 1;
 
@@ -724,6 +732,7 @@ namespace darcy
     DoFRenumbering::component_wise(this->dof_handler, block_component);
 
     this->rf_dof_handler.distribute_dofs(this->rf_fe_system);
+    DoFRenumbering::Cuthill_McKee(this->rf_dof_handler);
 
     this->rf_locally_owned = this->rf_dof_handler.locally_owned_dofs();
     this->rf_locally_relevant =
@@ -742,14 +751,15 @@ namespace darcy
 
     std::locale s = this->pcout.get_stream().getloc();
     this->pcout.get_stream().imbue(std::locale(""));
-    this->pcout << "Number of active cells: " << this->triangulation.n_active_cells()
-                << std::endl
+    this->pcout << "Number of active cells: "
+                << this->triangulation.n_active_cells() << std::endl
                 << "Total number of cells: " << this->triangulation.n_cells()
                 << std::endl
-                << "Number of degrees of freedom: " << this->dof_handler.n_dofs()
-                << " (" << n_u << '+' << n_p << ')' << std::endl
-                << "Number of random field dofs: " << this->rf_dof_handler.n_dofs()
-                << std::endl;
+                << "Number of degrees of freedom: "
+                << this->dof_handler.n_dofs() << " (" << n_u << '+' << n_p
+                << ')' << std::endl
+                << "Number of random field dofs: "
+                << this->rf_dof_handler.n_dofs() << std::endl;
     this->pcout.get_stream().imbue(s);
 
     std::vector<IndexSet> partitioning, relevant_partitioning;
@@ -770,7 +780,8 @@ namespace darcy
 
       this->constraints.clear();
       this->constraints.reinit(relevant_set);
-      DoFTools::make_hanging_node_constraints(this->dof_handler, this->constraints);
+      DoFTools::make_hanging_node_constraints(this->dof_handler,
+                                              this->constraints);
       this->constraints.close();
 
       this->preconditioner_constraints.clear();
@@ -848,13 +859,15 @@ namespace darcy
 
     const Preconditioner::BlockSchurPreconditioner<decltype(op_S_inv),
                                                    decltype(ap_M_inv)>
-      block_preconditioner(this->system_matrix, op_S_inv, ap_M_inv,
+      block_preconditioner(this->system_matrix,
+                           op_S_inv,
+                           ap_M_inv,
                            this->computing_timer);
     this->pcout << "Block preconditioner for the system matrix created."
                 << std::endl;
 
-    const double rhs_norm = this->system_rhs.l2_norm();
-    const double abs_tol  = 1.e-14;
+    const double rhs_norm      = this->system_rhs.l2_norm();
+    const double abs_tol       = 1.e-14;
     const double rel_reduction = 1.e-12;
 
     this->pcout << "Solver: abs_tol=" << abs_tol
@@ -862,7 +875,8 @@ namespace darcy
                 << ", RHS norm=" << rhs_norm << std::endl;
 
     dealii::SolverControl solver_control_system(this->system_matrix.m(),
-                                                1.0e-10 * this->system_rhs.l2_norm(),
+                                                1.0e-10 *
+                                                  this->system_rhs.l2_norm(),
                                                 true,
                                                 1.0e-10);
     solver_control_system.enable_history_data();
