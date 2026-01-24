@@ -7,8 +7,8 @@
 
 #include <deal.II/fe/mapping_q.h>
 #include <deal.II/grid/grid_tools.h>
+#include <deal.II/grid/grid_tools_cache.h>
 #include <deal.II/numerics/matrix_tools.h>
-#include <deal.II/numerics/vector_tools.h>
 #include <filesystem>
 
 #include "darcy_base.h"
@@ -178,100 +178,50 @@ namespace darcy
   {
     TimerOutput::Scope timing_section(this->computing_timer,
                                       "Overwrite adjoint rhs");
-    this->pcout << "Overwriting adjoint rhs with upstream gradient..."
-                << std::endl;
-    this->system_rhs = 0;
 
-    const MappingQ<dim> mapping(2);
-
-    // Use RemotePointEvaluation for efficient distributed point handling
-    typename Utilities::MPI::RemotePointEvaluation<dim>::AdditionalData
-      eval_data;
-    eval_data.tolerance = 1.0e-9;
-    Utilities::MPI::RemotePointEvaluation<dim> rpe(eval_data);
-
-    // Initialize the cache - this finds which cells contain which points
-    rpe.reinit(this->spatial_coordinates, this->triangulation, mapping);
-
-    // Get the internal data structures from RPE
-    const auto &cell_data = rpe.get_cell_data();
-    const auto &point_ptrs =
-      rpe.get_point_ptrs(); // point_ptrs[i] to point_ptrs[i+1] are indices for
-                            // point i
-
+    this->system_rhs                 = 0;
     const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
+    MappingQ<dim>      dummy_mapping(2);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
 
-    // Pre-compute which DoFs belong to velocity components
-    std::vector<unsigned int> velocity_dof_to_comp(dofs_per_cell);
-    std::vector<bool>         is_velocity_dof(dofs_per_cell, false);
-    for (unsigned int i = 0; i < dofs_per_cell; ++i)
+    for (const auto &cell_tria : this->triangulation.active_cell_iterators())
       {
-        const unsigned int comp = this->fe.system_to_component_index(i).first;
-        velocity_dof_to_comp[i] = comp;
-        is_velocity_dof[i]      = (comp < dim);
-      }
-
-    // Build reverse mapping: local evaluation index -> original point index
-    // The total number of local evaluations
-    const unsigned int n_local_evals = cell_data.reference_point_ptrs.back();
-
-    std::vector<unsigned int> eval_to_point(n_local_evals);
-    for (unsigned int pt = 0; pt < point_ptrs.size() - 1; ++pt)
-      {
-        for (unsigned int j = point_ptrs[pt]; j < point_ptrs[pt + 1]; ++j)
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
+        if (cell->is_locally_owned())
           {
-            if (j < n_local_evals)
-              eval_to_point[j] = pt;
-          }
-      }
+            cell->get_dof_indices(local_dof_indices);
+            std::vector<unsigned int> data_element_idx;
 
-    // Local accumulation buffer
-    std::vector<double> local_rhs(dofs_per_cell);
+            for (unsigned int k = 0; k < this->spatial_coordinates.size(); ++k)
+              if (cell->point_inside(this->spatial_coordinates[k]))
+                data_element_idx.push_back(k);
 
-    // Use the CellData interface properly
-    for (const auto c : cell_data.cell_indices())
-      {
-        const auto cell =
-          cell_data.get_active_cell_iterator(c)->as_dof_handler_iterator(
-            this->dof_handler);
-
-        cell->get_dof_indices(local_dof_indices);
-
-        // Reset local buffer
-        std::fill(local_rhs.begin(), local_rhs.end(), 0.0);
-
-        // Get unit points for this cell
-        const auto unit_points = cell_data.get_unit_points(c);
-
-        // Get range of evaluation indices for this cell
-        const unsigned int start = cell_data.reference_point_ptrs[c];
-
-        // Loop over points in this cell
-        for (unsigned int p = 0; p < unit_points.size(); ++p)
-          {
-            const Point<dim>  &unit_point     = unit_points[p];
-            const unsigned int eval_idx       = start + p;
-            const unsigned int orig_point_idx = eval_to_point[eval_idx];
-
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            for (unsigned int k = 0; k < data_element_idx.size(); ++k)
               {
-                if (!is_velocity_dof[i])
-                  continue;
+                Point<dim> current_cell_point =
+                  dummy_mapping.transform_real_to_unit_cell(
+                    cell, this->spatial_coordinates[data_element_idx[k]]);
 
-                const unsigned int comp  = velocity_dof_to_comp[i];
-                const double shape_value = this->fe.shape_value(i, unit_point);
+                for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                  {
+                    const unsigned int comp =
+                      this->fe.system_to_component_index(i).first;
 
-                local_rhs[i] += data_vec[orig_point_idx][comp] * shape_value;
+                    if (comp >= dim)
+                      continue;
+
+                    const double shape_value =
+                      this->fe.shape_value(i, current_cell_point);
+                    const double grad_log_lik =
+                      data_vec[data_element_idx[k]][comp];
+
+                    this->system_rhs(local_dof_indices[i]) +=
+                      grad_log_lik * shape_value;
+                  }
               }
           }
-
-        // Add local contributions to global RHS
-        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-          if (is_velocity_dof[i])
-            this->system_rhs(local_dof_indices[i]) += local_rhs[i];
       }
-
     this->system_rhs.compress(VectorOperation::add);
     this->pcout << "Successfully overwritten rhs..." << std::endl;
     this->pcout << "Adjoint rhs norm: " << this->system_rhs.l2_norm()
