@@ -239,7 +239,7 @@ namespace darcy
             for (unsigned int k = 0; k < dim; ++k)
               {
                 double epsilon =
-                  1e-7; // small perturbation to avoid coinciding points
+                  1e-3; // small perturbation to avoid coinciding points
                 this->spatial_coordinates[cell->vertex_index(v)][k] += epsilon;
               }
           }

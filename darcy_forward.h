@@ -5,7 +5,9 @@
 #ifndef DARCY_FORWARD_H
 #define DARCY_FORWARD_H
 
-#include <deal.II/base/mpi_remote_point_evaluation.h>
+#include <deal.II/base/bounding_box.h>
+#include <deal.II/base/geometry_info.h>
+#include <deal.II/fe/mapping_q.h>
 
 #include "darcy_base.h"
 
@@ -36,6 +38,8 @@ namespace darcy
     output_full_velocity_npy(); // Full solution to .npy
     void
     output_velocity_at_observation_points_npy();
+    void
+    output_spatial_coordinates_npy(); // Observation point coordinates to .npy
 
     // -------------------------------------------------------------------------
     // Simulation driver
@@ -65,37 +69,159 @@ namespace darcy
     TimerOutput::Scope timer_section(this->computing_timer,
                                      "   Remote point evaluation");
 
-    const MappingQ<dim> dummy_mapping(2);
+    const MappingQ<dim> mapping(2);
+    const double        tolerance = 1e-10;
+    const unsigned int  n_points  = this->spatial_coordinates.size();
 
     this->solution_distributed = this->solution;
 
-    typename Utilities::MPI::RemotePointEvaluation<dim>::AdditionalData
-      eval_data;
-    eval_data.tolerance = 1.0e-9;
-    Utilities::MPI::RemotePointEvaluation<dim> evaluation_cache(eval_data);
-    const auto                                 data_array =
-      VectorTools::point_values<dim>(dummy_mapping,
-                                     this->dof_handler,
-                                     this->solution_distributed,
-                                     this->spatial_coordinates,
-                                     evaluation_cache);
+    // Step 1: Find which cell contains each point (with globally unique
+    // assignment)
+    std::vector<types::global_cell_index> point_to_cell_id(
+      n_points, std::numeric_limits<types::global_cell_index>::max());
+    std::vector<typename DoFHandler<dim>::active_cell_iterator> point_to_cell(
+      n_points);
+    std::vector<Point<dim>> point_to_unit(n_points);
 
+    for (const auto &cell : this->dof_handler.active_cell_iterators())
+      {
+        if (!cell->is_locally_owned())
+          continue;
+
+        const types::global_cell_index cell_id =
+          cell->global_active_cell_index();
+
+        // Extended bounding box for curved cells
+        BoundingBox<dim> bbox(cell->bounding_box());
+        auto             bounds = bbox.get_boundary_points();
+        for (unsigned int d = 0; d < dim; ++d)
+          {
+            bounds.first[d] -= 0.1 * (bounds.second[d] - bounds.first[d]);
+            bounds.second[d] += 0.1 * (bounds.second[d] - bounds.first[d]);
+          }
+        bbox = BoundingBox<dim>(bounds);
+
+        for (unsigned int k = 0; k < n_points; ++k)
+          {
+            const Point<dim> &point = this->spatial_coordinates[k];
+            if (!bbox.point_inside(point))
+              continue;
+
+            try
+              {
+                const Point<dim> unit_point =
+                  mapping.transform_real_to_unit_cell(cell, point);
+
+                if (GeometryInfo<dim>::is_inside_unit_cell(unit_point,
+                                                           tolerance))
+                  {
+                    if (cell_id < point_to_cell_id[k])
+                      {
+                        point_to_cell_id[k] = cell_id;
+                        point_to_cell[k]    = cell;
+                        point_to_unit[k]    = unit_point;
+                      }
+                  }
+              }
+            catch (...)
+              {}
+          }
+      }
+
+    // Step 2: Global reduction to ensure unique assignment
+    std::vector<types::global_cell_index> global_min_cell_id(n_points);
+    MPI_Allreduce(point_to_cell_id.data(),
+                  global_min_cell_id.data(),
+                  n_points,
+                  MPI_UNSIGNED_LONG_LONG,
+                  MPI_MIN,
+                  MPI_COMM_WORLD);
+
+    // Step 3: Evaluate solution at points owned by this rank
+    std::vector<double> local_values(dim * n_points, 0.0);
+
+    const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
+    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+
+    for (unsigned int k = 0; k < n_points; ++k)
+      {
+        if (point_to_cell_id[k] != global_min_cell_id[k] ||
+            point_to_cell_id[k] ==
+              std::numeric_limits<types::global_cell_index>::max())
+          continue;
+
+        const auto       &cell       = point_to_cell[k];
+        const Point<dim> &unit_point = point_to_unit[k];
+
+        cell->get_dof_indices(local_dof_indices);
+
+        // Evaluate each velocity component
+        for (unsigned int d = 0; d < dim; ++d)
+          {
+            double value = 0.0;
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+              {
+                const unsigned int comp =
+                  this->fe.system_to_component_index(i).first;
+                if (comp == d)
+                  {
+                    value += this->fe.shape_value(i, unit_point) *
+                             this->solution_distributed(local_dof_indices[i]);
+                  }
+              }
+            local_values[d * n_points + k] = value;
+          }
+      }
+
+    // Step 4: Reduce to rank 0
+    std::vector<double> global_values(dim * n_points, 0.0);
+    MPI_Reduce(local_values.data(),
+               global_values.data(),
+               dim * n_points,
+               MPI_DOUBLE,
+               MPI_SUM,
+               0,
+               MPI_COMM_WORLD);
+
+    // Step 5: Write on rank 0
+    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      {
+        const std::string filename = this->params.output_directory + "/" +
+                                     this->params.output_prefix + "sol.npy";
+        this->write_data_to_npy(filename,
+                                global_values,
+                                global_values.size(),
+                                1);
+      }
+  }
+
+  // Write observation point coordinates to "_coordinates.npy".
+  // Output format: [all x_1, all x_2, all x_3] - coordinate components stacked.
+  // Only rank 0 writes the file.
+  template <int dim>
+  void
+  DarcyForward<dim>::output_spatial_coordinates_npy()
+  {
     // Only rank 0 writes the output file
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
       {
-        const unsigned int  n_points = data_array.size();
+        const unsigned int  n_points = this->spatial_coordinates.size();
         std::vector<double> output_data(dim * n_points);
 
-        // Reorder: [all u_1, all u_2, all u_3]
+        // Reorder: [all x_1, all x_2, all x_3]
         for (unsigned int d = 0; d < dim; ++d)
           {
             for (unsigned int i = 0; i < n_points; ++i)
               {
-                output_data[d * n_points + i] = data_array[i][d];
+                output_data[d * n_points + i] = this->spatial_coordinates[i][d];
               }
           }
+
         const std::string filename = this->params.output_directory + "/" +
-                                     this->params.output_prefix + "sol.npy";
+                                     this->params.output_prefix +
+                                     "coordinates.npy";
+        this->pcout << "Writing observation coordinates to: " << filename
+                    << std::endl;
         this->write_data_to_npy(filename, output_data, output_data.size(), 1);
       }
   }
@@ -286,6 +412,7 @@ namespace darcy
     output_pvtu();
     output_full_velocity_npy();
     output_velocity_at_observation_points_npy();
+    output_spatial_coordinates_npy();
 
   } // end run simulation
 
