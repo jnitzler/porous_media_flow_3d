@@ -234,7 +234,15 @@ namespace darcy
     for (const auto &cell : this->triangulation_obs.active_cell_iterators())
       {
         for (unsigned int v = 0; v < cell->n_vertices(); ++v)
-          this->spatial_coordinates[cell->vertex_index(v)] = cell->vertex(v);
+          {
+            this->spatial_coordinates[cell->vertex_index(v)] = cell->vertex(v);
+            for (unsigned int k = 0; k < dim; ++k)
+              {
+                double epsilon =
+                  1e-3; // small perturbation to avoid coinciding points
+                this->spatial_coordinates[cell->vertex_index(v)][k] += epsilon;
+              }
+          }
       }
 
     this->pcout << "Number of observation points: "

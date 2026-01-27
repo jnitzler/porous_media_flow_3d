@@ -5,9 +5,13 @@
 #ifndef DARCY_ADJOINT_H
 #define DARCY_ADJOINT_H
 
+#include <deal.II/base/bounding_box.h>
+#include <deal.II/base/geometry_info.h>
 #include <deal.II/fe/mapping_q.h>
+#include <deal.II/grid/grid_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <filesystem>
+#include <map>
 
 #include "darcy_base.h"
 
@@ -41,6 +45,8 @@ namespace darcy
     // -------------------------------------------------------------------------
     // Adjoint-specific methods
     // -------------------------------------------------------------------------
+    void
+    setup_point_evaluation_cache(); // Initialize RPE for observation points
     void
     overwrite_adjoint_rhs(); // Build RHS from upstream gradient
     void
@@ -85,6 +91,13 @@ namespace darcy
     std::vector<std::vector<double>>
                         data_vec; // Upstream gradient [point][component]
     std::vector<double> grad_log_lik_x_partial_distributed; // Partial gradient
+
+    // --- Cached point evaluation data (from
+    // distributed_compute_point_locations) ---
+    std::vector<typename DoFHandler<dim>::active_cell_iterator> cached_cells;
+    std::vector<std::vector<Point<dim>>> cached_qpoints; // unit points
+    std::vector<std::vector<unsigned int>>
+      cached_point_indices; // original indices
   };
 
   // Constructor implementation
@@ -172,56 +185,194 @@ namespace darcy
 
   template <int dim>
   void
+  DarcyAdjoint<dim>::setup_point_evaluation_cache()
+  {
+    TimerOutput::Scope timing_section(this->computing_timer,
+                                      "Setup point evaluation cache");
+    this->pcout << "Setting up point evaluation cache..." << std::endl;
+
+    const MappingQ<dim> mapping(2);
+
+    cached_cells.clear();
+    cached_qpoints.clear();
+    cached_point_indices.clear();
+
+    const double       tolerance = 1e-10;
+    const unsigned int n_points  = this->spatial_coordinates.size();
+
+    // For each point, track which cell contains it and its global cell ID
+    // We use global cell ID to ensure consistent assignment across ranks
+    // (the cell with smallest global ID wins)
+    std::vector<types::global_cell_index> point_to_cell_id(
+      n_points, std::numeric_limits<types::global_cell_index>::max());
+    std::vector<typename DoFHandler<dim>::active_cell_iterator> point_to_cell(
+      n_points);
+    std::vector<Point<dim>> point_to_unit(n_points);
+
+    // For each locally owned cell, check which points are inside
+    for (const auto &cell : this->dof_handler.active_cell_iterators())
+      {
+        if (!cell->is_locally_owned())
+          continue;
+
+        const types::global_cell_index cell_id =
+          cell->global_active_cell_index();
+
+        // Get cell bounding box for quick rejection
+        // Extend bbox slightly for curved cells
+        BoundingBox<dim> bbox(cell->bounding_box());
+        auto             bounds = bbox.get_boundary_points();
+        for (unsigned int d = 0; d < dim; ++d)
+          {
+            bounds.first[d] -= 0.1 * (bounds.second[d] - bounds.first[d]);
+            bounds.second[d] += 0.1 * (bounds.second[d] - bounds.first[d]);
+          }
+        bbox = BoundingBox<dim>(bounds);
+
+        for (unsigned int k = 0; k < n_points; ++k)
+          {
+            const Point<dim> &point = this->spatial_coordinates[k];
+
+            // Quick bounding box check
+            if (!bbox.point_inside(point))
+              continue;
+
+            // Detailed check: transform to unit coordinates
+            try
+              {
+                const Point<dim> unit_point =
+                  mapping.transform_real_to_unit_cell(cell, point);
+
+                // Check if point is inside reference cell
+                if (GeometryInfo<dim>::is_inside_unit_cell(unit_point,
+                                                           tolerance))
+                  {
+                    // Use smallest cell ID to break ties consistently
+                    if (cell_id < point_to_cell_id[k])
+                      {
+                        point_to_cell_id[k] = cell_id;
+                        point_to_cell[k]    = cell;
+                        point_to_unit[k]    = unit_point;
+                      }
+                  }
+              }
+            catch (...)
+              {
+                // Point not in this cell (transformation failed)
+              }
+          }
+      }
+
+    // Now find the global minimum cell ID for each point across all ranks
+    std::vector<types::global_cell_index> global_min_cell_id(n_points);
+    MPI_Allreduce(point_to_cell_id.data(),
+                  global_min_cell_id.data(),
+                  n_points,
+                  MPI_UNSIGNED_LONG_LONG,
+                  MPI_MIN,
+                  MPI_COMM_WORLD);
+
+    // Build map: only keep points where this rank has the winning cell
+    std::map<typename DoFHandler<dim>::active_cell_iterator,
+             std::pair<std::vector<Point<dim>>, std::vector<unsigned int>>>
+      cell_point_map;
+
+    for (unsigned int k = 0; k < n_points; ++k)
+      {
+        // This rank wins if its cell ID matches the global minimum
+        if (point_to_cell_id[k] == global_min_cell_id[k] &&
+            point_to_cell_id[k] !=
+              std::numeric_limits<types::global_cell_index>::max())
+          {
+            cell_point_map[point_to_cell[k]].first.push_back(point_to_unit[k]);
+            cell_point_map[point_to_cell[k]].second.push_back(k);
+          }
+      }
+
+    // Convert map to vectors for efficient iteration
+    for (const auto &[cell, data] : cell_point_map)
+      {
+        cached_cells.push_back(cell);
+        cached_qpoints.push_back(data.first);
+        cached_point_indices.push_back(data.second);
+      }
+
+    // Diagnostic: count points assigned
+    unsigned int local_points_found = 0;
+    for (const auto &indices : cached_point_indices)
+      local_points_found += indices.size();
+
+    const unsigned int global_points_found =
+      Utilities::MPI::sum(local_points_found, MPI_COMM_WORLD);
+
+    this->pcout << "Point evaluation cache: " << global_points_found << " / "
+                << n_points << " points assigned globally." << std::endl;
+
+    if (global_points_found != n_points)
+      this->pcout << "WARNING: " << (n_points - global_points_found)
+                  << " points were not found in any cell!" << std::endl;
+  }
+
+  template <int dim>
+  void
   DarcyAdjoint<dim>::overwrite_adjoint_rhs()
   {
     TimerOutput::Scope timing_section(this->computing_timer,
                                       "Overwrite adjoint rhs");
+    this->pcout << "Overwriting adjoint rhs with upstream gradient..."
+                << std::endl;
 
-    this->system_rhs                 = 0;
+    this->system_rhs = 0;
+
     const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
-    MappingQ<dim>      dummy_mapping(2);
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
 
-    for (const auto &cell_tria : this->triangulation.active_cell_iterators())
+    // Precompute which DoF indices correspond to velocity components
+    std::vector<unsigned int> velocity_dofs;
+    std::vector<unsigned int> velocity_dof_component;
+    velocity_dofs.reserve(dofs_per_cell);
+    velocity_dof_component.reserve(dofs_per_cell);
+    for (unsigned int i = 0; i < dofs_per_cell; ++i)
       {
-        const auto &cell =
-          cell_tria->as_dof_handler_iterator(this->dof_handler);
-        if (cell->is_locally_owned())
+        const unsigned int comp = this->fe.system_to_component_index(i).first;
+        if (comp < dim)
           {
-            cell->get_dof_indices(local_dof_indices);
-            std::vector<unsigned int> data_element_idx;
+            velocity_dofs.push_back(i);
+            velocity_dof_component.push_back(comp);
+          }
+      }
+    const unsigned int n_velocity_dofs = velocity_dofs.size();
 
-            for (unsigned int k = 0; k < this->spatial_coordinates.size(); ++k)
-              if (cell->point_inside(this->spatial_coordinates[k]))
-                data_element_idx.push_back(k);
+    // Loop over cached cells with their points
+    for (unsigned int c = 0; c < cached_cells.size(); ++c)
+      {
+        const auto &cell = cached_cells[c];
+        cell->get_dof_indices(local_dof_indices);
 
-            for (unsigned int k = 0; k < data_element_idx.size(); ++k)
+        const auto &unit_points   = cached_qpoints[c];
+        const auto &point_indices = cached_point_indices[c];
+
+        // Loop over points in this cell
+        for (unsigned int p = 0; p < unit_points.size(); ++p)
+          {
+            const Point<dim>  &unit_point = unit_points[p];
+            const unsigned int k          = point_indices[p];
+
+            // Assemble contribution from this point (only velocity DoFs)
+            for (unsigned int v = 0; v < n_velocity_dofs; ++v)
               {
-                Point<dim> current_cell_point =
-                  dummy_mapping.transform_real_to_unit_cell(
-                    cell, this->spatial_coordinates[data_element_idx[k]]);
+                const unsigned int i     = velocity_dofs[v];
+                const unsigned int comp  = velocity_dof_component[v];
+                const double shape_value = this->fe.shape_value(i, unit_point);
 
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                  {
-                    const unsigned int comp =
-                      this->fe.system_to_component_index(i).first;
-
-                    if (comp >= dim)
-                      continue;
-
-                    const double shape_value =
-                      this->fe.shape_value(i, current_cell_point);
-                    const double grad_log_lik =
-                      data_vec[data_element_idx[k]][comp];
-
-                    this->system_rhs(local_dof_indices[i]) +=
-                      grad_log_lik * shape_value;
-                  }
+                this->system_rhs(local_dof_indices[i]) +=
+                  data_vec[k][comp] * shape_value;
               }
           }
       }
+
     this->system_rhs.compress(VectorOperation::add);
-    this->pcout << "Successfully overwritten rhs..." << std::endl;
+    this->pcout << "Successfully overwritten rhs." << std::endl;
     this->pcout << "Adjoint rhs norm: " << this->system_rhs.l2_norm()
                 << std::endl;
   }
@@ -311,7 +462,7 @@ namespace darcy
     prior_grad.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
-      x_minus_mean[idx] = this->x_vec[idx];
+      x_minus_mean[idx] = this->x_vec_distributed[idx];
     x_minus_mean.compress(VectorOperation::insert);
 
     x_minus_mean.add(-1.0, this->mean_rf);
@@ -410,6 +561,7 @@ namespace darcy
 
     this->read_input_npy();
     this->generate_coordinates();
+    setup_point_evaluation_cache(); // Cache RPE for efficient RHS assembly
     read_upstream_gradient_npy(adjoint_data_path.string());
     read_primary_solution();
     this->assemble_approx_schur_complement();
@@ -498,6 +650,8 @@ namespace darcy
 
     grad_log_lik_x.assign(x_dim, 0.0);
     grad_log_lik_x_distributed.assign(x_dim, 0.0);
+    this->x_vec_distributed = this->x_vec; // Ensure distributed x_vec is set
+
 
     const MappingQ<dim> mapping(2);
 
