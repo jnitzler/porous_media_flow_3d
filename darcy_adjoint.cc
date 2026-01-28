@@ -5,7 +5,7 @@
 #include "parameters.h"
 
 // Explicit template instantiation
-template class darcy::DarcyAdjoint<3>;
+template class darcy::DarcyAdjoint<2>;
 
 // ---------------------- main function adjoint -----------------------------
 int
