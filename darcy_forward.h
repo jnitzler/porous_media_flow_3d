@@ -91,13 +91,15 @@ namespace darcy
         const types::global_cell_index cell_id =
           cell->global_active_cell_index();
 
-        // Extended bounding box for curved cells
+        // Extended bounding box for curved cells (quadratic mapping can
+        // cause cell geometry to extend significantly beyond vertex positions)
         BoundingBox<dim> bbox(cell->bounding_box());
         auto             bounds = bbox.get_boundary_points();
         for (unsigned int d = 0; d < dim; ++d)
           {
-            bounds.first[d] -= 0.1 * (bounds.second[d] - bounds.first[d]);
-            bounds.second[d] += 0.1 * (bounds.second[d] - bounds.first[d]);
+            const double extent = bounds.second[d] - bounds.first[d];
+            bounds.first[d] -= 0.5 * extent;
+            bounds.second[d] += 0.5 * extent;
           }
         bbox = BoundingBox<dim>(bounds);
 

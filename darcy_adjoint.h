@@ -48,13 +48,23 @@ namespace darcy
     void
     setup_point_evaluation_cache(); // Initialize RPE for observation points
     void
-    overwrite_adjoint_rhs(); // Build RHS from upstream gradient
+    overwrite_adjoint_rhs(); // Build RHS from upstream gradient (mollified)
     void
     final_inner_adjoint_product(); // Compute dL/dx = -lambda^T (dA/dx) u
     void
     create_rf_laplace_operator(); // GMRF prior precision matrix
     void
     add_prior_gradient_to_adjoint(); // Add prior regularization to gradient
+
+    // -------------------------------------------------------------------------
+    // Helper functions
+    // -------------------------------------------------------------------------
+    double
+    compute_average_cell_diameter() const;
+    bool
+    is_cell_near_any_observation(
+      const typename DoFHandler<dim>::active_cell_iterator &cell,
+      const double                                          cutoff) const;
 
     // -------------------------------------------------------------------------
     // Adjoint-specific output methods
@@ -219,13 +229,15 @@ namespace darcy
           cell->global_active_cell_index();
 
         // Get cell bounding box for quick rejection
-        // Extend bbox slightly for curved cells
+        // Extend bbox generously for curved cells (quadratic mapping can
+        // cause cell geometry to extend significantly beyond vertex positions)
         BoundingBox<dim> bbox(cell->bounding_box());
         auto             bounds = bbox.get_boundary_points();
         for (unsigned int d = 0; d < dim; ++d)
           {
-            bounds.first[d] -= 0.1 * (bounds.second[d] - bounds.first[d]);
-            bounds.second[d] += 0.1 * (bounds.second[d] - bounds.first[d]);
+            const double extent = bounds.second[d] - bounds.first[d];
+            bounds.first[d] -= 0.5 * extent;
+            bounds.second[d] += 0.5 * extent;
           }
         bbox = BoundingBox<dim>(bounds);
 
@@ -313,6 +325,67 @@ namespace darcy
                   << " points were not found in any cell!" << std::endl;
   }
 
+  // ==========================================================================
+  // Helper: Compute average cell diameter across all MPI ranks
+  // ==========================================================================
+  template <int dim>
+  double
+  DarcyAdjoint<dim>::compute_average_cell_diameter() const
+  {
+    double       local_diameter_sum = 0.0;
+    unsigned int local_n_cells      = 0;
+
+    for (const auto &cell : this->dof_handler.active_cell_iterators())
+      if (cell->is_locally_owned())
+        {
+          local_diameter_sum += cell->diameter();
+          ++local_n_cells;
+        }
+
+    const double global_diameter_sum =
+      Utilities::MPI::sum(local_diameter_sum, MPI_COMM_WORLD);
+    const unsigned int global_n_cells =
+      Utilities::MPI::sum(local_n_cells, MPI_COMM_WORLD);
+
+    return global_diameter_sum / global_n_cells;
+  }
+
+  // ==========================================================================
+  // Helper: Check if cell is near any observation point
+  // ==========================================================================
+  template <int dim>
+  bool
+  DarcyAdjoint<dim>::is_cell_near_any_observation(
+    const typename DoFHandler<dim>::active_cell_iterator &cell,
+    const double                                          cutoff) const
+  {
+    const Point<dim> cell_center   = cell->center();
+    const double     cell_diameter = cell->diameter();
+    const double     threshold     = cutoff + cell_diameter;
+
+    for (const auto &obs_point : this->spatial_coordinates)
+      if (cell_center.distance(obs_point) < threshold)
+        return true;
+
+    return false;
+  }
+
+  // ==========================================================================
+  // Mollified adjoint RHS assembly
+  // ==========================================================================
+  // Instead of using Dirac delta point observations (which cause mesh-dependent
+  // spikes), we use a Gaussian mollification kernel:
+  //
+  //   RHS_i = sum_k (dL/dy_k) * integral[ G(x - x_k) * phi_i(x) dx ]
+  //
+  // where G(r) = exp(-|r|^2 / (2*sigma^2)) is an unnormalized Gaussian.
+  //
+  // Benefits:
+  //   - Lower magnitude spikes (load spread over multiple elements)
+  //   - Mesh-independent behavior (spikes don't sharpen with refinement)
+  //   - Smoother gradients for the inverse problem
+  // ==========================================================================
+
   template <int dim>
   void
   DarcyAdjoint<dim>::overwrite_adjoint_rhs()
@@ -322,59 +395,122 @@ namespace darcy
     this->pcout << "Overwriting adjoint rhs with upstream gradient..."
                 << std::endl;
 
-    this->system_rhs = 0;
+    // -------------------------------------------------------------------------
+    // Compute mollification parameters (adaptive based on mesh size)
+    // -------------------------------------------------------------------------
+    const double avg_cell_diameter = compute_average_cell_diameter();
+    const double sigma_factor      = this->params.mollification_sigma_factor;
+    const double sigma             = sigma_factor * avg_cell_diameter;
+    const double sigma_sq          = sigma * sigma;
+    const double cutoff            = 4.0 * sigma;
+    const double cutoff_sq         = cutoff * cutoff;
+    const double normalization =
+      std::pow(2.0 * numbers::PI * sigma_sq, static_cast<double>(dim) / 2.0);
+
+    this->pcout << "  Mollification: sigma = " << sigma << " (" << sigma_factor
+                << " x avg_h = " << avg_cell_diameter << ")" << std::endl;
+
+    // -------------------------------------------------------------------------
+    // FEM setup
+    // -------------------------------------------------------------------------
+    const MappingQ<dim> mapping(2);
+    const QGauss<dim>   quadrature(this->degree_u + 1);
+
+    FEValues<dim> fe_values(mapping,
+                            this->fe,
+                            quadrature,
+                            update_values | update_quadrature_points |
+                              update_JxW_values);
 
     const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
-    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+    const unsigned int n_q_points    = quadrature.size();
+    const unsigned int n_obs_points  = this->spatial_coordinates.size();
 
-    // Precompute which DoF indices correspond to velocity components
-    std::vector<unsigned int> velocity_dofs;
-    std::vector<unsigned int> velocity_dof_component;
-    velocity_dofs.reserve(dofs_per_cell);
-    velocity_dof_component.reserve(dofs_per_cell);
+    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+    Vector<double>                       local_rhs(dofs_per_cell);
+
+    // -------------------------------------------------------------------------
+    // Identify velocity DoFs (exclude pressure DoFs from RHS assembly)
+    // -------------------------------------------------------------------------
+    std::vector<unsigned int> velocity_dof_indices;
+    std::vector<unsigned int> velocity_components;
     for (unsigned int i = 0; i < dofs_per_cell; ++i)
       {
         const unsigned int comp = this->fe.system_to_component_index(i).first;
-        if (comp < dim)
+        if (comp < dim) // velocity components are 0, 1, 2 (in 3D)
           {
-            velocity_dofs.push_back(i);
-            velocity_dof_component.push_back(comp);
+            velocity_dof_indices.push_back(i);
+            velocity_components.push_back(comp);
           }
       }
-    const unsigned int n_velocity_dofs = velocity_dofs.size();
+    const unsigned int n_velocity_dofs = velocity_dof_indices.size();
 
-    // Loop over cached cells with their points
-    for (unsigned int c = 0; c < cached_cells.size(); ++c)
+    // -------------------------------------------------------------------------
+    // Initialize RHS to zero
+    // -------------------------------------------------------------------------
+    this->system_rhs = 0;
+
+    // -------------------------------------------------------------------------
+    // Assembly loop over locally owned cells
+    // -------------------------------------------------------------------------
+    for (const auto &cell : this->dof_handler.active_cell_iterators())
       {
-        const auto &cell = cached_cells[c];
+        if (!cell->is_locally_owned())
+          continue;
+
+        // Quick rejection: skip cells far from all observation points
+        if (!is_cell_near_any_observation(cell, cutoff))
+          continue;
+
+        // Initialize FE values and local data
+        fe_values.reinit(cell);
         cell->get_dof_indices(local_dof_indices);
+        local_rhs = 0;
 
-        const auto &unit_points   = cached_qpoints[c];
-        const auto &point_indices = cached_point_indices[c];
-
-        // Loop over points in this cell
-        for (unsigned int p = 0; p < unit_points.size(); ++p)
+        // Loop over quadrature points
+        for (unsigned int q = 0; q < n_q_points; ++q)
           {
-            const Point<dim>  &unit_point = unit_points[p];
-            const unsigned int k          = point_indices[p];
+            const Point<dim> &x_q = fe_values.quadrature_point(q);
+            const double      JxW = fe_values.JxW(q);
 
-            // Assemble contribution from this point (only velocity DoFs)
-            for (unsigned int v = 0; v < n_velocity_dofs; ++v)
+            // Accumulate contributions from nearby observation points
+            for (unsigned int k = 0; k < n_obs_points; ++k)
               {
-                const unsigned int i     = velocity_dofs[v];
-                const unsigned int comp  = velocity_dof_component[v];
-                const double shape_value = this->fe.shape_value(i, unit_point);
+                const Point<dim> &x_obs   = this->spatial_coordinates[k];
+                const double      dist_sq = (x_q - x_obs).norm_square();
 
-                this->system_rhs(local_dof_indices[i]) +=
-                  data_vec[k][comp] * shape_value;
+                // Skip observation points outside the cutoff radius
+                if (dist_sq > cutoff_sq)
+                  continue;
+
+                // Evaluate Gaussian kernel (unnormalized)
+                const double gaussian = std::exp(-dist_sq / (2.0 * sigma_sq));
+
+                // Add contribution to velocity DoFs only
+                for (unsigned int v = 0; v < n_velocity_dofs; ++v)
+                  {
+                    const unsigned int i    = velocity_dof_indices[v];
+                    const unsigned int comp = velocity_components[v];
+                    const double       phi  = fe_values.shape_value(i, q);
+
+                    local_rhs(i) += data_vec[k][comp] * gaussian * phi * JxW;
+                  }
               }
           }
+
+        // Accumulate local contributions to global RHS
+        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+          this->system_rhs(local_dof_indices[i]) += local_rhs(i);
       }
 
+    // -------------------------------------------------------------------------
+    // Finalize: compress and normalize
+    // -------------------------------------------------------------------------
     this->system_rhs.compress(VectorOperation::add);
-    this->pcout << "Successfully overwritten rhs." << std::endl;
-    this->pcout << "Adjoint rhs norm: " << this->system_rhs.l2_norm()
-                << std::endl;
+    this->system_rhs /= normalization;
+
+    this->pcout << "  Adjoint RHS assembled successfully." << std::endl;
+    this->pcout << "  RHS L2 norm: " << this->system_rhs.l2_norm() << std::endl;
   }
 
   template <int dim>
