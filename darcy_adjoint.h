@@ -467,26 +467,36 @@ namespace darcy
         cell->get_dof_indices(local_dof_indices);
         local_rhs = 0;
 
-        // Loop over quadrature points
-        for (unsigned int q = 0; q < n_q_points; ++q)
-          {
-            const Point<dim> &x_q = fe_values.quadrature_point(q);
-            const double      JxW = fe_values.JxW(q);
+        // Get cell center for quick per-observation-point rejection
+        const Point<dim> cell_center   = cell->center();
+        const double     cell_radius   = 0.5 * cell->diameter();
+        const double     obs_threshold = cutoff + cell_radius;
 
-            // Accumulate contributions from nearby observation points
-            for (unsigned int k = 0; k < n_obs_points; ++k)
+        // Optimized loop: observation points as outer loop
+        // This allows skipping the entire quadrature loop for distant obs
+        // points
+        for (unsigned int k = 0; k < n_obs_points; ++k)
+          {
+            const Point<dim> &x_obs = this->spatial_coordinates[k];
+
+            // Quick rejection: skip if observation point is far from cell
+            if (cell_center.distance(x_obs) > obs_threshold)
+              continue;
+
+            // This observation point may contribute - loop over quadrature
+            for (unsigned int q = 0; q < n_q_points; ++q)
               {
-                const Point<dim> &x_obs   = this->spatial_coordinates[k];
+                const Point<dim> &x_q     = fe_values.quadrature_point(q);
                 const double      dist_sq = (x_q - x_obs).norm_square();
 
-                // Skip observation points outside the cutoff radius
+                // Skip if quadrature point is outside the Gaussian cutoff
                 if (dist_sq > cutoff_sq)
                   continue;
 
-                // Evaluate Gaussian kernel (unnormalized)
+                // Evaluate Gaussian kernel and accumulate contributions
                 const double gaussian = std::exp(-dist_sq / (2.0 * sigma_sq));
+                const double JxW      = fe_values.JxW(q);
 
-                // Add contribution to velocity DoFs only
                 for (unsigned int v = 0; v < n_velocity_dofs; ++v)
                   {
                     const unsigned int i    = velocity_dof_indices[v];
