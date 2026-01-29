@@ -32,6 +32,7 @@ The executables use deal.II's `ParameterHandler` to read configuration from a JS
 - `output directory`: Path to the output directory for results
 - `output prefix`: Prefix for output filenames (e.g., 'run1_' or 'test_')
 - `adjoint data file`: Filename of the adjoint data npy file (assumed to be in the same directory as the input npy file, only used for adjoint problem)
+- `mollification sigma factor`: Factor to scale the mollification sigma for the adjoint problem's right-hand side (smoothing of the delta distributions at observation points)
 
 Example JSON configuration (`parameters.json`):
 ```json
@@ -46,6 +47,9 @@ Example JSON configuration (`parameters.json`):
     "output directory": "output",
     "output prefix": "my_sim_",
     "adjoint data file": "adjoint_data.npy"
+  },
+  "Adjoint": {
+    "mollification sigma factor": 1.0
   }
 }
 ```
@@ -63,6 +67,10 @@ subsection Input/Output
   set output directory = output
   set output prefix = 
   set adjoint data file = adjoint_data.npy
+end
+
+subsection Adjoint
+  set mollification sigma factor = 1.0
 end
 ```
 
