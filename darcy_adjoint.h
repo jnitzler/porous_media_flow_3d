@@ -5,13 +5,16 @@
 #ifndef DARCY_ADJOINT_H
 #define DARCY_ADJOINT_H
 
+#include <boost/geometry/index/rtree.hpp>
 #include <deal.II/base/bounding_box.h>
 #include <deal.II/base/geometry_info.h>
 #include <deal.II/fe/mapping_q.h>
 #include <deal.II/grid/grid_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
+#include <deal.II/numerics/rtree.h>
 #include <filesystem>
 #include <map>
+#include <unordered_map>
 
 #include "darcy_base.h"
 
@@ -48,23 +51,13 @@ namespace darcy
     void
     setup_point_evaluation_cache(); // Initialize RPE for observation points
     void
-    overwrite_adjoint_rhs(); // Build RHS from upstream gradient (mollified)
+    overwrite_adjoint_rhs(); // Build RHS from upstream gradient (point-wise)
     void
     final_inner_adjoint_product(); // Compute dL/dx = -lambda^T (dA/dx) u
     void
     create_rf_laplace_operator(); // GMRF prior precision matrix
     void
     add_prior_gradient_to_adjoint(); // Add prior regularization to gradient
-
-    // -------------------------------------------------------------------------
-    // Helper functions
-    // -------------------------------------------------------------------------
-    double
-    compute_average_cell_diameter() const;
-    bool
-    is_cell_near_any_observation(
-      const typename DoFHandler<dim>::active_cell_iterator &cell,
-      const double                                          cutoff) const;
 
     // -------------------------------------------------------------------------
     // Adjoint-specific output methods
@@ -108,6 +101,9 @@ namespace darcy
     std::vector<std::vector<Point<dim>>> cached_qpoints; // unit points
     std::vector<std::vector<unsigned int>>
       cached_point_indices; // original indices
+
+    // --- Random field mass matrix (needed for M^{-1} in SPDE precision) ---
+    TrilinosWrappers::SparseMatrix rf_mass_matrix;
   };
 
   // Constructor implementation
@@ -210,6 +206,10 @@ namespace darcy
     const double       tolerance = 1e-10;
     const unsigned int n_points  = this->spatial_coordinates.size();
 
+    // Build rtree spatial index for observation points
+    namespace bgi        = boost::geometry::index;
+    const auto obs_rtree = pack_rtree_of_indices(this->spatial_coordinates);
+
     // For each point, track which cell contains it and its global cell ID
     // We use global cell ID to ensure consistent assignment across ranks
     // (the cell with smallest global ID wins)
@@ -219,7 +219,7 @@ namespace darcy
       n_points);
     std::vector<Point<dim>> point_to_unit(n_points);
 
-    // For each locally owned cell, check which points are inside
+    // For each locally owned cell, query rtree for candidate points
     for (const auto &cell : this->dof_handler.active_cell_iterators())
       {
         if (!cell->is_locally_owned())
@@ -241,19 +241,20 @@ namespace darcy
           }
         bbox = BoundingBox<dim>(bounds);
 
-        for (unsigned int k = 0; k < n_points; ++k)
-          {
-            const Point<dim> &point = this->spatial_coordinates[k];
+        // Query rtree for candidate points in the extended bounding box
+        std::vector<typename decltype(obs_rtree)::value_type> candidates;
+        obs_rtree.query(bgi::intersects(bbox), std::back_inserter(candidates));
 
-            // Quick bounding box check
-            if (!bbox.point_inside(point))
-              continue;
+        for (const auto &idx : candidates)
+          {
+            const unsigned int k = static_cast<unsigned int>(idx);
 
             // Detailed check: transform to unit coordinates
             try
               {
                 const Point<dim> unit_point =
-                  mapping.transform_real_to_unit_cell(cell, point);
+                  mapping.transform_real_to_unit_cell(
+                    cell, this->spatial_coordinates[k]);
 
                 // Check if point is inside reference cell
                 if (GeometryInfo<dim>::is_inside_unit_cell(unit_point,
@@ -326,64 +327,16 @@ namespace darcy
   }
 
   // ==========================================================================
-  // Helper: Compute average cell diameter across all MPI ranks
+  // Point-wise adjoint RHS assembly
   // ==========================================================================
-  template <int dim>
-  double
-  DarcyAdjoint<dim>::compute_average_cell_diameter() const
-  {
-    double       local_diameter_sum = 0.0;
-    unsigned int local_n_cells      = 0;
-
-    for (const auto &cell : this->dof_handler.active_cell_iterators())
-      if (cell->is_locally_owned())
-        {
-          local_diameter_sum += cell->diameter();
-          ++local_n_cells;
-        }
-
-    const double global_diameter_sum =
-      Utilities::MPI::sum(local_diameter_sum, MPI_COMM_WORLD);
-    const unsigned int global_n_cells =
-      Utilities::MPI::sum(local_n_cells, MPI_COMM_WORLD);
-
-    return global_diameter_sum / global_n_cells;
-  }
-
-  // ==========================================================================
-  // Helper: Check if cell is near any observation point
-  // ==========================================================================
-  template <int dim>
-  bool
-  DarcyAdjoint<dim>::is_cell_near_any_observation(
-    const typename DoFHandler<dim>::active_cell_iterator &cell,
-    const double                                          cutoff) const
-  {
-    const Point<dim> cell_center   = cell->center();
-    const double     cell_diameter = cell->diameter();
-    const double     threshold     = cutoff + cell_diameter;
-
-    for (const auto &obs_point : this->spatial_coordinates)
-      if (cell_center.distance(obs_point) < threshold)
-        return true;
-
-    return false;
-  }
-
-  // ==========================================================================
-  // Mollified adjoint RHS assembly
-  // ==========================================================================
-  // Instead of using Dirac delta point observations (which cause mesh-dependent
-  // spikes), we use a Gaussian mollification kernel:
+  // Assembles the exact adjoint of the forward point-evaluation operator:
   //
-  //   RHS_i = sum_k (dL/dy_k) * integral[ G(x - x_k) * phi_i(x) dx ]
+  //   Forward:  y_{k,d} = sum_i phi_i(x_k) * u_i     (for velocity DOFs i)
+  //   Adjoint:  RHS_i   = sum_k g_{k,comp(i)} * phi_i(x_k)
   //
-  // where G(r) = exp(-|r|^2 / (2*sigma^2)) is an unnormalized Gaussian.
-  //
-  // Benefits:
-  //   - Lower magnitude spikes (load spread over multiple elements)
-  //   - Mesh-independent behavior (spikes don't sharpen with refinement)
-  //   - Smoother gradients for the inverse problem
+  // where g_k = dL/dy_k is the upstream gradient (from data_vec).
+  // Uses the cached point-cell associations from setup_point_evaluation_cache()
+  // which ensures each observation point is assigned to exactly one MPI rank.
   // ==========================================================================
 
   template <int dim>
@@ -392,134 +345,60 @@ namespace darcy
   {
     TimerOutput::Scope timing_section(this->computing_timer,
                                       "Overwrite adjoint rhs");
-    this->pcout << "Overwriting adjoint rhs with upstream gradient..."
+    this->pcout << "Overwriting adjoint RHS (point-wise evaluation)..."
                 << std::endl;
 
-    // -------------------------------------------------------------------------
-    // Compute mollification parameters (adaptive based on mesh size)
-    // -------------------------------------------------------------------------
-    const double avg_cell_diameter = compute_average_cell_diameter();
-    const double sigma_factor      = this->params.mollification_sigma_factor;
-    const double sigma             = sigma_factor * avg_cell_diameter;
-    const double sigma_sq          = sigma * sigma;
-    const double cutoff            = 4.0 * sigma;
-    const double cutoff_sq         = cutoff * cutoff;
-    const double normalization =
-      std::pow(2.0 * numbers::PI * sigma_sq, static_cast<double>(dim) / 2.0);
-
-    this->pcout << "  Mollification: sigma = " << sigma << " (" << sigma_factor
-                << " x avg_h = " << avg_cell_diameter << ")" << std::endl;
-
-    // -------------------------------------------------------------------------
-    // FEM setup
-    // -------------------------------------------------------------------------
-    const MappingQ<dim> mapping(2);
-    const QGauss<dim>   quadrature(this->degree_u + 1);
-
-    FEValues<dim> fe_values(mapping,
-                            this->fe,
-                            quadrature,
-                            update_values | update_quadrature_points |
-                              update_JxW_values);
-
     const unsigned int dofs_per_cell = this->fe.n_dofs_per_cell();
-    const unsigned int n_q_points    = quadrature.size();
-    const unsigned int n_obs_points  = this->spatial_coordinates.size();
-
     std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
     Vector<double>                       local_rhs(dofs_per_cell);
 
-    // -------------------------------------------------------------------------
     // Identify velocity DoFs (exclude pressure DoFs from RHS assembly)
-    // -------------------------------------------------------------------------
     std::vector<unsigned int> velocity_dof_indices;
     std::vector<unsigned int> velocity_components;
     for (unsigned int i = 0; i < dofs_per_cell; ++i)
       {
         const unsigned int comp = this->fe.system_to_component_index(i).first;
-        if (comp < dim) // velocity components are 0, 1, 2 (in 3D)
+        if (comp < dim)
           {
             velocity_dof_indices.push_back(i);
             velocity_components.push_back(comp);
           }
       }
-    const unsigned int n_velocity_dofs = velocity_dof_indices.size();
 
-    // -------------------------------------------------------------------------
-    // Initialize RHS to zero
-    // -------------------------------------------------------------------------
     this->system_rhs = 0;
 
-    // -------------------------------------------------------------------------
-    // Assembly loop over locally owned cells
-    // -------------------------------------------------------------------------
-    for (const auto &cell : this->dof_handler.active_cell_iterators())
+    // Assemble using cached point-cell associations.
+    // Each observation point is uniquely assigned to one rank/cell.
+    for (unsigned int c = 0; c < cached_cells.size(); ++c)
       {
-        if (!cell->is_locally_owned())
-          continue;
-
-        // Quick rejection: skip cells far from all observation points
-        if (!is_cell_near_any_observation(cell, cutoff))
-          continue;
-
-        // Initialize FE values and local data
-        fe_values.reinit(cell);
-        cell->get_dof_indices(local_dof_indices);
+        cached_cells[c]->get_dof_indices(local_dof_indices);
         local_rhs = 0;
 
-        // Get cell center for quick per-observation-point rejection
-        const Point<dim> cell_center   = cell->center();
-        const double     cell_radius   = 0.5 * cell->diameter();
-        const double     obs_threshold = cutoff + cell_radius;
+        const auto &ref_points    = cached_qpoints[c];
+        const auto &point_indices = cached_point_indices[c];
 
-        // Optimized loop: observation points as outer loop
-        // This allows skipping the entire quadrature loop for distant obs
-        // points
-        for (unsigned int k = 0; k < n_obs_points; ++k)
+        for (unsigned int p = 0; p < ref_points.size(); ++p)
           {
-            const Point<dim> &x_obs = this->spatial_coordinates[k];
+            const unsigned int k         = point_indices[p];
+            const Point<dim>  &ref_point = ref_points[p];
 
-            // Quick rejection: skip if observation point is far from cell
-            if (cell_center.distance(x_obs) > obs_threshold)
-              continue;
-
-            // This observation point may contribute - loop over quadrature
-            for (unsigned int q = 0; q < n_q_points; ++q)
+            for (unsigned int v = 0; v < velocity_dof_indices.size(); ++v)
               {
-                const Point<dim> &x_q     = fe_values.quadrature_point(q);
-                const double      dist_sq = (x_q - x_obs).norm_square();
+                const unsigned int i    = velocity_dof_indices[v];
+                const unsigned int comp = velocity_components[v];
 
-                // Skip if quadrature point is outside the Gaussian cutoff
-                if (dist_sq > cutoff_sq)
-                  continue;
-
-                // Evaluate Gaussian kernel and accumulate contributions
-                const double gaussian = std::exp(-dist_sq / (2.0 * sigma_sq));
-                const double JxW      = fe_values.JxW(q);
-
-                for (unsigned int v = 0; v < n_velocity_dofs; ++v)
-                  {
-                    const unsigned int i    = velocity_dof_indices[v];
-                    const unsigned int comp = velocity_components[v];
-                    const double       phi  = fe_values.shape_value(i, q);
-
-                    local_rhs(i) += data_vec[k][comp] * gaussian * phi * JxW;
-                  }
+                local_rhs(i) +=
+                  data_vec[k][comp] * this->fe.shape_value(i, ref_point);
               }
           }
 
-        // Accumulate local contributions to global RHS
         for (unsigned int i = 0; i < dofs_per_cell; ++i)
           this->system_rhs(local_dof_indices[i]) += local_rhs(i);
       }
 
-    // -------------------------------------------------------------------------
-    // Finalize: compress and normalize
-    // -------------------------------------------------------------------------
     this->system_rhs.compress(VectorOperation::add);
-    this->system_rhs /= normalization;
 
-    this->pcout << "  Adjoint RHS assembled successfully." << std::endl;
+    this->pcout << "  Adjoint RHS assembled (point-wise)." << std::endl;
     this->pcout << "  RHS L2 norm: " << this->system_rhs.l2_norm() << std::endl;
   }
 
@@ -583,7 +462,7 @@ namespace darcy
                                          coefficient,
                                          rf_constraints);
 
-    TrilinosWrappers::SparseMatrix rf_mass_matrix(sp_rf);
+    rf_mass_matrix.reinit(sp_rf);
 
     MatrixCreator::create_mass_matrix(mapping,
                                       this->rf_dof_handler,
@@ -592,20 +471,55 @@ namespace darcy
                                       coefficient,
                                       rf_constraints);
 
-    const double epsilon = 1e-5;
-    this->rf_laplace_matrix.add(epsilon, rf_mass_matrix);
+    // L = G + kappa^2 * M (SPDE precision operator).
+    // kappa^2 controls the correlation length: rho = sqrt(8*nu) / kappa.
+    const double kappa_squared = this->params.kappa_squared;
+    this->pcout << "  kappa^2 = " << kappa_squared << std::endl;
+    this->rf_laplace_matrix.add(kappa_squared, rf_mass_matrix);
   }
 
   template <int dim>
   void
   DarcyAdjoint<dim>::add_prior_gradient_to_adjoint()
   {
-    const double a = 1e-9 + this->rf_dof_handler.n_dofs() / 2.0;
+    // SPDE--GMRF prior with precision matrix (Lindgren, Rue & Lindstroem,
+    // 2011):
+    //   Q_SPDE = z * B_n^T * M^{-1} * B_n
+    // where B_n = A_kappa * (M^{-1} * A_kappa)^{n-1},
+    //       A_kappa = kappa^2 * M + G  (stiffness + scaled mass matrix),
+    //       n = alpha (SPDE operator power).
+    //
+    // Matern smoothness: nu = n - dim/2.
+    //   n=2, dim=3 -> nu=0.5 (continuous), n=3 -> nu=1.5 (differentiable)
+    //
+    // The gradient of the log-prior is:
+    //   nabla_x log p(x) = -z * B_n^T * M^{-1} * B_n * (x - mu)
+    // computed via:
+    //   1. Forward cascade:  w = B_n * (x - mu)        [n A_kappa, n-1
+    //   M-solves]
+    //   2. Middle solve:     u = M^{-1} * w             [1 M-solve]
+    //   3. Reverse cascade:  g = B_n^T * u              [n A_kappa, n-1
+    //   M-solves]
+    // Total: 2n sparse matvecs, 2n-1 mass solves.
+    //
+    // Hierarchical z update (conjugate Gamma hyper-prior z ~ Gamma(a0, b0)):
+    //   z = (a0 + n_dofs/2) / (b0 + 0.5 * w^T * u)
+    const unsigned int n = this->params.alpha;
+
+    this->pcout << "  SPDE prior: n=" << n << ", dim=" << dim
+                << ", nu=" << n - dim / 2.0 << std::endl;
+
+    const double a0 = 1e-9;
+    const double b0 = 1e-9;
+    const double a  = a0 + this->rf_dof_handler.n_dofs() / 2.0;
 
     const IndexSet &owned = this->rf_dof_handler.locally_owned_dofs();
-    TrilinosWrappers::MPI::Vector x_minus_mean, prior_grad;
+    TrilinosWrappers::MPI::Vector x_minus_mean, w, u, grad, temp;
     x_minus_mean.reinit(owned, MPI_COMM_WORLD);
-    prior_grad.reinit(owned, MPI_COMM_WORLD);
+    w.reinit(owned, MPI_COMM_WORLD);
+    u.reinit(owned, MPI_COMM_WORLD);
+    grad.reinit(owned, MPI_COMM_WORLD);
+    temp.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
       x_minus_mean[idx] = this->x_vec_distributed[idx];
@@ -613,22 +527,76 @@ namespace darcy
 
     x_minus_mean.add(-1.0, this->mean_rf);
 
-    this->rf_laplace_matrix.vmult(prior_grad, x_minus_mean);
+    TrilinosWrappers::PreconditionJacobi mass_preconditioner;
+    mass_preconditioner.initialize(rf_mass_matrix);
 
-    const double b_0       = 1e-9;
-    const double quad_form = x_minus_mean * prior_grad;
-    const double b         = b_0 + 0.5 * quad_form;
+    // -------------------------------------------------------------------
+    // Forward cascade: w = B_n * (x - mu)
+    //   B_n = A_kappa * (M^{-1} * A_kappa)^{n-1}
+    // -------------------------------------------------------------------
+    w = x_minus_mean;
+    for (unsigned int i = 0; i < n - 1; ++i)
+      {
+        this->rf_laplace_matrix.vmult(temp, w);
+        SolverControl solver_control(100, 1e-10 * temp.l2_norm());
+        SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
+        w = 0;
+        cg.solve(rf_mass_matrix, w, temp, mass_preconditioner);
+        this->pcout << "    Forward M^{-1} solve " << i + 1 << ": "
+                    << solver_control.last_step() << " CG iterations"
+                    << std::endl;
+      }
+    this->rf_laplace_matrix.vmult(temp, w);
+    w = temp;
 
-    prior_grad *= -(a / b);
+    // -------------------------------------------------------------------
+    // Middle solve: u = M^{-1} * w
+    // -------------------------------------------------------------------
+    {
+      SolverControl solver_control(100, 1e-10 * w.l2_norm());
+      SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
+      u = 0;
+      cg.solve(rf_mass_matrix, u, w, mass_preconditioner);
+      this->pcout << "    Middle M^{-1} solve: " << solver_control.last_step()
+                  << " CG iterations" << std::endl;
+    }
+
+    // -------------------------------------------------------------------
+    // Quadratic form: q = w^T * u = (B_n(x-mu))^T M^{-1} (B_n(x-mu))
+    // -------------------------------------------------------------------
+    const double quad_form = w * u;
+    const double b         = b0 + 0.5 * quad_form;
+    const double z         = a / b;
+    this->pcout << "  Precision scaling z = " << z
+                << " (quad_form = " << quad_form << ")" << std::endl;
+
+    // -------------------------------------------------------------------
+    // Reverse cascade: grad = B_n^T * u
+    //   B_n^T = (A_kappa * M^{-1})^{n-1} * A_kappa  (A_kappa, M symmetric)
+    // -------------------------------------------------------------------
+    this->rf_laplace_matrix.vmult(grad, u);
+    for (unsigned int i = 0; i < n - 1; ++i)
+      {
+        SolverControl solver_control(100, 1e-10 * grad.l2_norm());
+        SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
+        temp = 0;
+        cg.solve(rf_mass_matrix, temp, grad, mass_preconditioner);
+        this->pcout << "    Reverse M^{-1} solve " << i + 1 << ": "
+                    << solver_control.last_step() << " CG iterations"
+                    << std::endl;
+        this->rf_laplace_matrix.vmult(grad, temp);
+      }
+
+    grad *= -z;
 
     for (const auto idx : owned)
-      grad_log_lik_x_distributed[idx] += prior_grad[idx];
+      grad_log_lik_x_distributed[idx] += grad[idx];
 
     Utilities::MPI::sum(grad_log_lik_x_distributed,
                         MPI_COMM_WORLD,
                         grad_log_lik_x);
 
-    this->pcout << "Successfully added prior gradient to adjoint gradient!"
+    this->pcout << "Successfully added SPDE prior gradient to adjoint gradient!"
                 << std::endl;
   }
 
@@ -801,7 +769,14 @@ namespace darcy
 
     const MappingQ<dim> mapping(2);
 
-    const QGauss<dim> quadrature(this->degree_u + 1);
+    // Use higher quadrature order to accurately integrate:
+    // - Q2 velocity basis functions (adjoint and primary)
+    // - Q2 random field basis functions
+    // - Non-polynomial exp(-x) term
+    // The product Q2 * Q2 * Q2 * exp() needs more quadrature points
+    const unsigned int quadrature_order =
+      std::max(this->degree_u, this->degree_rf) + 3;
+    const QGauss<dim> quadrature(quadrature_order);
 
     FEValues<dim>      fe_values(mapping,
                             this->fe,

@@ -14,3 +14,7 @@ input/
 # ignore Visual Studio Code settings
 .vscode
 
+# ignore Claude Code files
+CLAUDE.md
+.claude/
+
