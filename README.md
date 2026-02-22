@@ -24,54 +24,56 @@ $$K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$$
 such that $\boldsymbol{x}$ can be inferred without constraints.
 
 ## Configuration
-The executables use deal.II's `ParameterHandler` to read configuration from a JSON or PRM file. The parameter file specifies:
-- `pressure fe degree`: Polynomial degree of the finite element basis functions for pressure (e.g., 1 for linear elements, 2 for quadratic)
-- `refinement level`: Global refinement level for the main triangulation (default: 4)
-- `refinement level obs`: Global refinement level for the observation triangulation (default: 3)
-- `input npy file`: Path to the input npy file containing random field coefficients
-- `output directory`: Path to the output directory for results
-- `output prefix`: Prefix for output filenames (e.g., 'run1_' or 'test_')
-- `adjoint data file`: Filename of the adjoint data npy file (assumed to be in the same directory as the input npy file, only used for adjoint problem)
-- `mollification sigma factor`: Factor to scale the mollification sigma for the adjoint problem's right-hand side (smoothing of the delta distributions at observation points)
+The executables use deal.II's `ParameterHandler` to read configuration from a JSON or PRM file.
 
-Example JSON configuration (`parameters.json`):
+### Parameters
+
+| Parameter | Section | Default | Description |
+|---|---|---|---|
+| `pressure fe degree` | Discretization | 1 | Polynomial degree for pressure FE (velocity = degree + 1) |
+| `random field fe degree` | Discretization | 2 | Polynomial degree for random field FE |
+| `refinement level` | Discretization | 4 | Global mesh refinement level |
+| `refinement level obs` | Discretization | 3 | Observation mesh refinement level |
+| `alpha` | Prior | 2 | SPDE operator power $n$: Matérn smoothness $\nu = n - d/2$. Use $n \geq 2$ for 3D |
+| `kappa squared` | Prior | 16.0 | Controls prior correlation length: $\rho = \sqrt{8\nu}/\kappa$ |
+| `input npy file` | Input/Output | — | Path to random field coefficients (.npy) |
+| `output directory` | Input/Output | `output` | Results directory |
+| `output prefix` | Input/Output | `""` | Filename prefix for outputs |
+| `adjoint data file` | Input/Output | `adjoint_data.npy` | Upstream gradient filename (adjoint only) |
+
+### SPDE prior parameters
+
+The adjoint solver uses an SPDE--GMRF prior (Lindgren, Rue & Lindström, 2011) with precision matrix $Q = z \, B_n^T M^{-1} B_n$, where $B_n = A_\kappa (M^{-1} A_\kappa)^{n-1}$ and $A_\kappa = \kappa^2 M + G$. The key parameters are:
+- **`alpha`** ($n$): SPDE operator power. Determines Matérn smoothness $\nu = n - d/2$. In 3D, $n=2$ gives $\nu=1/2$ (continuous paths), $n=3$ gives $\nu=3/2$ (differentiable). Must be $\geq 2$ for valid 3D fields.
+- **`kappa squared`** ($\kappa^2$): Controls the practical correlation length $\rho = \sqrt{8\nu}/\kappa$. Examples for $n=2$ ($\nu=0.5$) on the donut domain (outer radius 1.0):
+
+  | $\kappa^2$ | $\rho$ | Interpretation |
+  |---|---|---|
+  | 4.0 | 1.0 | Full domain extent |
+  | 16.0 | 0.5 | Half the outer radius |
+  | 64.0 | 0.25 | Local features |
+
+### Example JSON configuration
+
 ```json
 {
   "Discretization": {
     "pressure fe degree": 1,
+    "random field fe degree": 2,
     "refinement level": 4,
     "refinement level obs": 3
+  },
+  "Prior": {
+    "alpha": 2,
+    "kappa squared": 16.0
   },
   "Input/Output": {
     "input npy file": "input/markov_field_5.npy",
     "output directory": "output",
     "output prefix": "my_sim_",
     "adjoint data file": "adjoint_data.npy"
-  },
-  "Adjoint": {
-    "mollification sigma factor": 1.0
   }
 }
-```
-
-Alternatively, you can use the PRM format (`parameters.prm`):
-```prm
-subsection Discretization
-  set pressure fe degree = 1
-  set refinement level = 4
-  set refinement level obs = 3
-end
-
-subsection Input/Output
-  set input npy file = input/markov_field_5.npy
-  set output directory = output
-  set output prefix = 
-  set adjoint data file = adjoint_data.npy
-end
-
-subsection Adjoint
-  set mollification sigma factor = 1.0
-end
 ```
 
 ## Running the executables
