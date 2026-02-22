@@ -1,0 +1,18 @@
+{
+  "Discretization": {
+    "pressure fe degree": 1,
+    "random field fe degree": 2,
+    "refinement level": 4,
+    "refinement level obs": 3
+  },
+  "Prior": {
+    "alpha": 1,
+    "kappa squared": 0.1
+  },
+  "Input/Output": {
+    "input npy file": "/home/nitzler/workspace/QUEENS_Rep/queens_output_3d_paper/lf_mean.npy",
+    "output directory": "/home/nitzler/workspace/Own_dealii_projects/darcy_flow_3d_donut/output",
+    "output prefix": "new_",
+    "adjoint data file": "adjoint_data.npy"
+  }
+}

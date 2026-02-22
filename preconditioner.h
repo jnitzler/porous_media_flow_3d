@@ -61,12 +61,10 @@ namespace Preconditioner
     VectorType       &dst,
     const VectorType &src) const
   {
-    // Use ReductionControl for both absolute and relative tolerance
-    // This ensures consistent convergence regardless of src magnitude
-    const double         abs_tol = 1e-14;
-    const double         rel_tol = 1e-10;
-    ReductionControl     solver_control(src.size(), abs_tol, rel_tol);
-    SolverCG<VectorType> cg(solver_control);
+    // Use fixed iteration count instead of tight tolerance to limit
+    // per-application cost while maintaining preconditioner quality
+    IterationNumberControl solver_control(5, 1e-14);
+    SolverCG<VectorType>   cg(solver_control);
 
     dst = 0;
 

@@ -5,9 +5,11 @@
 #ifndef DARCY_FORWARD_H
 #define DARCY_FORWARD_H
 
+#include <boost/geometry/index/rtree.hpp>
 #include <deal.II/base/bounding_box.h>
 #include <deal.II/base/geometry_info.h>
 #include <deal.II/fe/mapping_q.h>
+#include <deal.II/numerics/rtree.h>
 
 #include "darcy_base.h"
 
@@ -75,6 +77,10 @@ namespace darcy
 
     this->solution_distributed = this->solution;
 
+    // Build rtree spatial index for observation points
+    namespace bgi        = boost::geometry::index;
+    const auto obs_rtree = pack_rtree_of_indices(this->spatial_coordinates);
+
     // Step 1: Find which cell contains each point (with globally unique
     // assignment)
     std::vector<types::global_cell_index> point_to_cell_id(
@@ -103,16 +109,19 @@ namespace darcy
           }
         bbox = BoundingBox<dim>(bounds);
 
-        for (unsigned int k = 0; k < n_points; ++k)
+        // Query rtree for candidate points in the extended bounding box
+        std::vector<typename decltype(obs_rtree)::value_type> candidates;
+        obs_rtree.query(bgi::intersects(bbox), std::back_inserter(candidates));
+
+        for (const auto &idx : candidates)
           {
-            const Point<dim> &point = this->spatial_coordinates[k];
-            if (!bbox.point_inside(point))
-              continue;
+            const unsigned int k = static_cast<unsigned int>(idx);
 
             try
               {
                 const Point<dim> unit_point =
-                  mapping.transform_real_to_unit_cell(cell, point);
+                  mapping.transform_real_to_unit_cell(
+                    cell, this->spatial_coordinates[k]);
 
                 if (GeometryInfo<dim>::is_inside_unit_cell(unit_point,
                                                            tolerance))

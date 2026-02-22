@@ -23,15 +23,15 @@ namespace darcy
     unsigned int refinement_level;
     unsigned int refinement_level_obs;
 
+    // Prior
+    unsigned int alpha;
+    double       kappa_squared;
+
     // Input/Output
     std::string input_npy_file;
     std::string output_directory;
     std::string output_prefix;
     std::string adjoint_data_file;
-
-    // Adjoint solver settings
-    double
-      mollification_sigma_factor; // Gaussian width = factor * avg cell diameter
 
     // Declare all parameters in the ParameterHandler
     static void
@@ -74,6 +74,24 @@ namespace darcy
     }
     prm.leave_subsection();
 
+    prm.enter_subsection("Prior");
+    {
+      prm.declare_entry("alpha",
+                        "1",
+                        Patterns::Integer(1, 3),
+                        "SPDE operator power n: Q = z * B_n^T M^{-1} B_n with "
+                        "B_n = A_kappa (M^{-1} A_kappa)^{n-1}. "
+                        "Matern smoothness nu = n - dim/2");
+
+      prm.declare_entry(
+        "kappa squared",
+        "1e-5",
+        Patterns::Double(0),
+        "SPDE parameter kappa^2 controlling the prior correlation length: "
+        "rho = sqrt(8*nu)/kappa. Larger values = shorter correlation length");
+    }
+    prm.leave_subsection();
+
     prm.enter_subsection("Input/Output");
     {
       prm.declare_entry("input npy file",
@@ -101,18 +119,6 @@ namespace darcy
         "directory as the input npy file, only used for adjoint problem)");
     }
     prm.leave_subsection();
-
-    prm.enter_subsection("Adjoint");
-    {
-      prm.declare_entry(
-        "mollification sigma factor",
-        "1.5",
-        Patterns::Double(0.1, 10.0),
-        "Width of Gaussian mollification kernel as multiple of average cell "
-        "diameter. Recommended: 1.0-3.0. Smaller values give sharper point "
-        "loads, larger values give smoother gradients.");
-    }
-    prm.leave_subsection();
   }
 
   void
@@ -127,18 +133,19 @@ namespace darcy
     }
     prm.leave_subsection();
 
+    prm.enter_subsection("Prior");
+    {
+      alpha         = prm.get_integer("alpha");
+      kappa_squared = prm.get_double("kappa squared");
+    }
+    prm.leave_subsection();
+
     prm.enter_subsection("Input/Output");
     {
       input_npy_file    = prm.get("input npy file");
       output_directory  = prm.get("output directory");
       output_prefix     = prm.get("output prefix");
       adjoint_data_file = prm.get("adjoint data file");
-    }
-    prm.leave_subsection();
-
-    prm.enter_subsection("Adjoint");
-    {
-      mollification_sigma_factor = prm.get_double("mollification sigma factor");
     }
     prm.leave_subsection();
   }
