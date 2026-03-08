@@ -15,7 +15,7 @@ With $K$ being a $\dim \times \dim$ permeability tensor, $\boldsymbol{u}$ the fl
 The project builds three executables:
 1. `darcy_forward`: Forward solve $\boldsymbol{y} = f(\boldsymbol{x})$ for given random field coefficients
 2. `darcy_adjoint`: Adjoint solve returning the gradient $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$
-3. `export_sparsity`: Exports the prior precision matrix sparsity pattern and values for external use
+3. `export_sparsity`: Exports the prior precision matrix sparsity pattern and values (COO format as `.npy` files). This is needed to construct a sparse variational approximation in the stochastic variational inference (SVI) framework — the FE mesh-induced sparsity pattern of $Q$ motivates the sparsity structure of the variational precision matrix, ensuring the approximation respects the local correlation structure of the prior.
 
 Both the forward and adjoint executables support 2D and 3D via the `spatial dimension` parameter.
 
