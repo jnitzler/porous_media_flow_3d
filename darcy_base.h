@@ -126,6 +126,8 @@ namespace darcy
     assemble_system(); // Assemble Darcy saddle-point system
     void
     assemble_approx_schur_complement(); // Assemble preconditioner matrix
+    void
+    assemble_system_and_schur(); // Merged assembly of both matrices
 
     // -------------------------------------------------------------------------
     // Solver
@@ -630,6 +632,229 @@ namespace darcy
 
   template <int dim>
   void
+  DarcyBase<dim>::assemble_system_and_schur()
+  {
+    TimerOutput::Scope timer_section(this->computing_timer,
+                                     "  Assemble system + Schur");
+    this->pcout << "Assemble system and Schur complement (merged)..."
+                << std::endl;
+
+    this->system_matrix       = 0;
+    this->system_rhs          = 0;
+    this->precondition_matrix = 0;
+
+    const QGauss<dim>     quadrature_formula(this->degree_u + 1);
+    const QGauss<dim - 1> face_quadrature_formula(this->degree_u + 1);
+
+    const MappingQ<dim> mapping(2);
+
+    FEValues<dim>     fe_values(mapping,
+                            this->fe,
+                            quadrature_formula,
+                            update_values | update_quadrature_points |
+                              update_JxW_values | update_gradients);
+    FEValues<dim>     fe_rf_values(mapping,
+                               this->rf_fe_system,
+                               quadrature_formula,
+                               update_values | update_quadrature_points);
+    FEFaceValues<dim> fe_face_values(mapping,
+                                     this->fe,
+                                     face_quadrature_formula,
+                                     update_values | update_gradients |
+                                       update_normal_vectors |
+                                       update_quadrature_points |
+                                       update_JxW_values);
+
+    const unsigned int dofs_per_cell   = this->fe.n_dofs_per_cell();
+    const unsigned int n_q_points      = quadrature_formula.size();
+    const unsigned int n_face_q_points = face_quadrature_formula.size();
+
+    std::vector<Tensor<1, dim>>          phi_u(dofs_per_cell);
+    std::vector<double>                  div_phi_u(dofs_per_cell);
+    std::vector<double>                  phi_p(dofs_per_cell);
+    std::vector<Tensor<1, dim>>          grad_phi_p(dofs_per_cell);
+    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+    FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
+    FullMatrix<double> local_precond_matrix(dofs_per_cell, dofs_per_cell);
+    Vector<double>     local_rhs(dofs_per_cell);
+
+    this->x_vec_distributed = this->x_vec;
+
+    for (const auto &cell_tria : this->triangulation.active_cell_iterators())
+      {
+        const auto &cell =
+          cell_tria->as_dof_handler_iterator(this->dof_handler);
+        const auto &rf_cell =
+          cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
+
+        if (cell->is_locally_owned())
+          {
+            fe_values.reinit(cell);
+            fe_rf_values.reinit(rf_cell);
+            cell->get_dof_indices(local_dof_indices);
+
+            const FEValuesExtractors::Vector velocities(0);
+            const FEValuesExtractors::Scalar pressure(dim);
+
+            local_matrix         = 0;
+            local_precond_matrix = 0;
+            local_rhs            = 0;
+
+            std::vector<double> boundary_values_pressure(n_face_q_points);
+            const PressureBoundaryValues<dim> pressure_boundary_values;
+
+            std::vector<double> rf_values(n_q_points);
+            Tensor<2, dim>      K_mat;
+            fe_rf_values.get_function_values(this->x_vec_distributed,
+                                             rf_values);
+
+            for (unsigned int q = 0; q < n_q_points; ++q)
+              {
+                RandomMedium::get_k_mat(rf_values[q], K_mat);
+                const Tensor<2, dim> k_inverse = invert(K_mat);
+
+                for (unsigned int k = 0; k < dofs_per_cell; ++k)
+                  {
+                    phi_u[k]      = fe_values[velocities].value(k, q);
+                    div_phi_u[k]  = fe_values[velocities].divergence(k, q);
+                    phi_p[k]      = fe_values[pressure].value(k, q);
+                    grad_phi_p[k] = fe_values[pressure].gradient(k, q);
+                  }
+
+                const auto JxW_q = fe_values.JxW(q);
+
+                // System matrix assembly
+                for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                  {
+                    for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                      {
+                        local_matrix(i, j) +=
+                          (phi_u[i] * k_inverse * phi_u[j] -
+                           phi_p[j] * div_phi_u[i] + grad_phi_p[i] * phi_u[j]) *
+                          JxW_q;
+                      }
+
+                    local_rhs(i) += (-phi_p[i] * 1.0) * JxW_q;
+                  }
+
+                // Schur complement assembly (pressure-pressure block)
+                for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                  for (unsigned int j = 0; j <= i; ++j)
+                    local_precond_matrix(i, j) +=
+                      (K_mat * grad_phi_p[i] * grad_phi_p[j]) * JxW_q;
+              }
+
+            // Symmetrize Schur complement local matrix
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+              for (unsigned int j = i + 1; j < dofs_per_cell; ++j)
+                local_precond_matrix(i, j) = local_precond_matrix(j, i);
+
+            // Face integrals
+            for (const auto &face : cell->face_iterators())
+              {
+                if (face->at_boundary() && face->boundary_id() == 1)
+                  {
+                    fe_face_values.reinit(cell, face);
+
+                    pressure_boundary_values.value_list(
+                      fe_face_values.get_quadrature_points(),
+                      boundary_values_pressure);
+
+                    const auto tau =
+                      5. * Utilities::fixed_power<2>(this->degree_p + 1) /
+                      cell->diameter();
+
+                    for (unsigned int q = 0; q < n_face_q_points; ++q)
+                      {
+                        const auto normal = fe_face_values.normal_vector(q);
+
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          {
+                            const Tensor<1, dim> phi_i_u =
+                              fe_face_values[velocities].value(i, q);
+                            const double phi_i_p =
+                              fe_face_values[pressure].value(i, q);
+                            const auto grad_phi_i_p =
+                              fe_face_values[pressure].gradient(i, q);
+
+                            // System RHS boundary term
+                            local_rhs(i) +=
+                              -(phi_i_u * normal * boundary_values_pressure[q] *
+                                fe_face_values.JxW(q));
+
+                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                              {
+                                const Tensor<1, dim> phi_j_u =
+                                  fe_face_values[velocities].value(j, q);
+                                const double phi_j_p =
+                                  fe_face_values[pressure].value(j, q);
+                                const auto grad_phi_j_p =
+                                  fe_face_values[pressure].gradient(j, q);
+
+                                // System matrix boundary term
+                                local_matrix(i, j) -=
+                                  (phi_i_p * (normal * phi_j_u)) *
+                                  fe_face_values.JxW(q);
+
+                                // Schur complement Nitsche boundary term
+                                local_precond_matrix(i, j) +=
+                                  (-grad_phi_i_p * normal * phi_j_p -
+                                   (phi_i_p *
+                                    (grad_phi_j_p * normal - tau * phi_j_p))) *
+                                  fe_face_values.JxW(q);
+                              }
+                          }
+                      }
+                  }
+
+                if (face->at_boundary() && face->boundary_id() == 0)
+                  {
+                    fe_face_values.reinit(cell, face);
+
+                    for (unsigned int q = 0; q < n_face_q_points; ++q)
+                      {
+                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                          {
+                            const Tensor<1, dim> phi_i_u =
+                              fe_face_values[velocities].value(i, q);
+
+                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                              {
+                                const double phi_j_p =
+                                  fe_face_values[pressure].value(j, q);
+
+                                local_matrix(i, j) +=
+                                  (phi_j_p *
+                                   (phi_i_u * fe_face_values.normal_vector(q)) *
+                                   fe_face_values.JxW(q));
+                              }
+                          }
+                      }
+                  }
+              }
+
+            this->constraints.distribute_local_to_global(local_matrix,
+                                                         local_rhs,
+                                                         local_dof_indices,
+                                                         this->system_matrix,
+                                                         this->system_rhs);
+            this->preconditioner_constraints.distribute_local_to_global(
+              local_precond_matrix,
+              local_dof_indices,
+              this->precondition_matrix);
+          }
+      }
+
+    this->system_matrix.compress(VectorOperation::add);
+    this->system_rhs.compress(VectorOperation::add);
+    this->precondition_matrix.compress(VectorOperation::add);
+
+    this->pcout << "System and Schur complement successfully assembled"
+                << std::endl;
+  }
+
+  template <int dim>
+  void
   DarcyBase<dim>::setup_system_matrix(
     const std::vector<IndexSet> &partitioning,
     const std::vector<IndexSet> &relevant_partitioning)
@@ -864,42 +1089,53 @@ namespace darcy
     const auto        &M    = this->system_matrix.block(0, 0);
     const auto        &ap_S = this->precondition_matrix.block(1, 1);
 
-    TrilinosWrappers::PreconditionIC ap_M_inv;
-    ap_M_inv.initialize(M);
+    TrilinosWrappers::PreconditionAMG ap_M_inv;
+    {
+      TrilinosWrappers::PreconditionAMG::AdditionalData amg_data_M;
+      amg_data_M.elliptic              = true;
+      amg_data_M.higher_order_elements = true;
+      amg_data_M.smoother_sweeps       = 2;
+      amg_data_M.aggregation_threshold = 0.02;
+      ap_M_inv.initialize(M, amg_data_M);
+    }
 
-    TrilinosWrappers::PreconditionIC ap_S_inv;
-    ap_S_inv.initialize(ap_S);
-    const Preconditioner::InverseMatrix<TrilinosWrappers::SparseMatrix,
-                                        decltype(ap_S_inv)>
-      op_S_inv(ap_S, ap_S_inv);
+    TrilinosWrappers::PreconditionAMG ap_S_inv;
+    {
+      TrilinosWrappers::PreconditionAMG::AdditionalData amg_data_S;
+      amg_data_S.elliptic              = true;
+      amg_data_S.higher_order_elements = true;
+      amg_data_S.smoother_sweeps       = 2;
+      amg_data_S.aggregation_threshold = 0.02;
+      ap_S_inv.initialize(ap_S, amg_data_S);
+    }
 
-    const Preconditioner::BlockSchurPreconditioner<decltype(op_S_inv),
+    const Preconditioner::BlockSchurPreconditioner<decltype(ap_S_inv),
                                                    decltype(ap_M_inv)>
       block_preconditioner(this->system_matrix,
-                           op_S_inv,
+                           ap_S_inv,
                            ap_M_inv,
                            this->computing_timer);
     this->pcout << "Block preconditioner for the system matrix created."
                 << std::endl;
 
     const double rhs_norm      = this->system_rhs.l2_norm();
-    const double abs_tol       = 1.e-14;
-    const double rel_reduction = 1.e-12;
+    const double rel_reduction = 1.e-6;
 
-    this->pcout << "Solver: abs_tol=" << abs_tol
-                << ", rel_reduction=" << rel_reduction
+    this->pcout << "Solver: rel_reduction=" << rel_reduction
                 << ", RHS norm=" << rhs_norm << std::endl;
 
-    SolverControl solver_control_system(this->system_matrix.m(),
-                                        1.0e-10 * this->system_rhs.l2_norm(),
-                                        true,
-                                        true);
+    ReductionControl solver_control_system(this->system_matrix.m(),
+                                           1e-12,
+                                           rel_reduction);
     solver_control_system.enable_history_data();
     solver_control_system.log_history(true);
     solver_control_system.log_result(true);
-    SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver_system(
-      solver_control_system,
-      SolverGMRES<TrilinosWrappers::MPI::BlockVector>::AdditionalData(200));
+    SolverGMRES<TrilinosWrappers::MPI::BlockVector>
+      solver_system(
+        solver_control_system,
+        SolverGMRES<TrilinosWrappers::MPI::BlockVector>::AdditionalData(200,
+                                                                        true, /* right preconditioning */
+                                                                        true /* use Arnoldi residual estimate (avoids extra matvec per iter) */));
 
     this->solution = 0;
 

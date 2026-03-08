@@ -1,15 +1,16 @@
 {
   "Discretization": {
+    "spatial dimension": 3,
     "pressure fe degree": 1,
     "random field fe degree": 2,
     "refinement level": 4,
     "refinement level obs": 3
   },
   "Prior": {
-    "alpha": 2,
-    "kappa squared": 16.0
+    "nugget": 1.0e-4
   },
   "Input/Output": {
+    "ground truth": false,
     "input npy file": "{{ input_file_path }}",
     "output directory": "{{ output_directory }}",
     "output prefix": "{{ output_prefix }}",
