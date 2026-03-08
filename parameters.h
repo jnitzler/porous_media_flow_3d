@@ -18,16 +18,17 @@ namespace darcy
   struct Parameters
   {
     // Discretization
+    unsigned int spatial_dimension;
     unsigned int fe_degree;
     unsigned int degree_rf;
     unsigned int refinement_level;
     unsigned int refinement_level_obs;
 
     // Prior
-    unsigned int alpha;
-    double       kappa_squared;
+    double nugget;
 
     // Input/Output
+    bool        ground_truth;
     std::string input_npy_file;
     std::string output_directory;
     std::string output_prefix;
@@ -51,6 +52,11 @@ namespace darcy
   {
     prm.enter_subsection("Discretization");
     {
+      prm.declare_entry("spatial dimension",
+                        "3",
+                        Patterns::Integer(2, 3),
+                        "Spatial dimension of the problem (2 or 3)");
+
       prm.declare_entry("pressure fe degree",
                         "1",
                         Patterns::Integer(0),
@@ -76,24 +82,23 @@ namespace darcy
 
     prm.enter_subsection("Prior");
     {
-      prm.declare_entry("alpha",
-                        "1",
-                        Patterns::Integer(1, 3),
-                        "SPDE operator power n: Q = z * B_n^T M^{-1} B_n with "
-                        "B_n = A_kappa (M^{-1} A_kappa)^{n-1}. "
-                        "Matern smoothness nu = n - dim/2");
-
-      prm.declare_entry(
-        "kappa squared",
-        "1e-5",
-        Patterns::Double(0),
-        "SPDE parameter kappa^2 controlling the prior correlation length: "
-        "rho = sqrt(8*nu)/kappa. Larger values = shorter correlation length");
+      prm.declare_entry("nugget",
+                        "1e-6",
+                        Patterns::Double(0),
+                        "Nugget term for Markov prior: Q = G + nugget*M. "
+                        "Small positive value for positive-definiteness.");
     }
     prm.leave_subsection();
 
     prm.enter_subsection("Input/Output");
     {
+      prm.declare_entry(
+        "ground truth",
+        "false",
+        Patterns::Bool(),
+        "If true, use the analytical reference field (RefScalar) "
+        "instead of reading from the input npy file");
+
       prm.declare_entry("input npy file",
                         "input/markov_field_5.npy",
                         Patterns::FileName(),
@@ -126,6 +131,7 @@ namespace darcy
   {
     prm.enter_subsection("Discretization");
     {
+      spatial_dimension    = prm.get_integer("spatial dimension");
       fe_degree            = prm.get_integer("pressure fe degree");
       degree_rf            = prm.get_integer("random field fe degree");
       refinement_level     = prm.get_integer("refinement level");
@@ -135,13 +141,13 @@ namespace darcy
 
     prm.enter_subsection("Prior");
     {
-      alpha         = prm.get_integer("alpha");
-      kappa_squared = prm.get_double("kappa squared");
+      nugget = prm.get_double("nugget");
     }
     prm.leave_subsection();
 
     prm.enter_subsection("Input/Output");
     {
+      ground_truth      = prm.get_bool("ground truth");
       input_npy_file    = prm.get("input npy file");
       output_directory  = prm.get("output directory");
       output_prefix     = prm.get("output prefix");

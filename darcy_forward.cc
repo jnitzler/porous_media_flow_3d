@@ -4,7 +4,8 @@
 
 #include "parameters.h"
 
-// Explicit template instantiation
+// Explicit template instantiations
+template class darcy::DarcyForward<2>;
 template class darcy::DarcyForward<3>;
 
 // ----------------- main -----------------
@@ -54,9 +55,19 @@ main(int argc, char *argv[])
       // Create output directory if it doesn't exist
       std::filesystem::create_directories(params.output_directory);
 
-      // Run forward solver
-      DarcyForward<3> mixed_laplace_problem(params.fe_degree, params.degree_rf);
-      mixed_laplace_problem.run(params);
+      // Run forward solver (dispatch on spatial dimension)
+      if (params.spatial_dimension == 2)
+        {
+          DarcyForward<2> mixed_laplace_problem(params.fe_degree,
+                                                params.degree_rf);
+          mixed_laplace_problem.run(params);
+        }
+      else
+        {
+          DarcyForward<3> mixed_laplace_problem(params.fe_degree,
+                                                params.degree_rf);
+          mixed_laplace_problem.run(params);
+        }
     }
   catch (std::exception &exc)
     {

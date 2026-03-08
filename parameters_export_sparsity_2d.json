@@ -1,19 +1,18 @@
 {
   "Discretization": {
-    "spatial dimension": 3,
+    "spatial dimension": 2,
     "pressure fe degree": 1,
     "random field fe degree": 2,
     "refinement level": 4,
     "refinement level obs": 3
   },
   "Prior": {
-    "nugget": 1.0e-4
+    "nugget": 1e-7
   },
   "Input/Output": {
-    "ground truth": false,
-    "input npy file": "{{ input_file_path }}",
-    "output directory": "{{ output_directory }}",
-    "output prefix": "{{ output_prefix }}",
+    "input npy file": "dummy.npy",
+    "output directory": ".",
+    "output prefix": "",
     "adjoint data file": "adjoint_data.npy"
   }
 }

@@ -4,7 +4,8 @@
 
 #include "parameters.h"
 
-// Explicit template instantiation
+// Explicit template instantiations
+template class darcy::DarcyAdjoint<2>;
 template class darcy::DarcyAdjoint<3>;
 
 // ---------------------- main function adjoint -----------------------------
@@ -50,9 +51,19 @@ main(int argc, char *argv[])
       // Create output directory if it doesn't exist
       std::filesystem::create_directories(params.output_directory);
 
-      // Run adjoint solver
-      DarcyAdjoint<3> mixed_laplace_problem(params.fe_degree, params.degree_rf);
-      mixed_laplace_problem.run(params);
+      // Run adjoint solver (dispatch on spatial dimension)
+      if (params.spatial_dimension == 2)
+        {
+          DarcyAdjoint<2> mixed_laplace_problem(params.fe_degree,
+                                                params.degree_rf);
+          mixed_laplace_problem.run(params);
+        }
+      else
+        {
+          DarcyAdjoint<3> mixed_laplace_problem(params.fe_degree,
+                                                params.degree_rf);
+          mixed_laplace_problem.run(params);
+        }
     }
   catch (std::exception &exc)
     {
