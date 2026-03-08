@@ -338,7 +338,7 @@ namespace darcy
     MappingQ<dim> mapping(2); // nonlinear mapping
     data_out.build_patches(mapping,
                            this->degree_u,
-                           DataOut<dim>::curved_inner_cells);
+                           DataOut<dim>::curved_boundary);
 
     constexpr unsigned int n_digits_counter = 2;
     constexpr unsigned int cycle = 0; // a counter for iterative output
@@ -382,7 +382,7 @@ namespace darcy
     // NOTE: In ParaView, keep "Nonlinear Subdivision Level" at 0 to avoid
     // artifacts - ParaView's subdivision algorithm doesn't match FEM
     // interpolation.
-    data_out_rf.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
+    data_out_rf.build_patches(mapping, 2, DataOut<dim>::curved_boundary);
     data_out_rf.write_vtu_with_pvtu_record(
       stripped_path_rf, filename_rf, cycle, MPI_COMM_WORLD, n_digits_counter);
   }
@@ -408,11 +408,13 @@ namespace darcy
   DarcyForward<dim>::run_simulation()
   {
     this->setup_grid_and_dofs();
-    this->read_input_npy();
-    // this->generate_ref_input(); // TODO: should be removed in production
+    if (this->params.ground_truth)
+      this->generate_ref_input();
+    else
+      this->read_input_npy();
+
     this->generate_coordinates();
-    this->assemble_approx_schur_complement();
-    this->assemble_system();
+    this->assemble_system_and_schur();
     this->solve();
 
     // Copy solution to ghosted vector for output

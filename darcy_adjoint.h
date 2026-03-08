@@ -471,55 +471,20 @@ namespace darcy
                                       coefficient,
                                       rf_constraints);
 
-    // L = G + kappa^2 * M (SPDE precision operator).
-    // kappa^2 controls the correlation length: rho = sqrt(8*nu) / kappa.
-    const double kappa_squared = this->params.kappa_squared;
-    this->pcout << "  kappa^2 = " << kappa_squared << std::endl;
-    this->rf_laplace_matrix.add(kappa_squared, rf_mass_matrix);
+    // Markov prior: Q = G + nugget * M
+    const double nugget = this->params.nugget;
+    this->pcout << "  Prior nugget = " << nugget << std::endl;
+    this->rf_laplace_matrix.add(nugget, rf_mass_matrix);
   }
 
   template <int dim>
   void
   DarcyAdjoint<dim>::add_prior_gradient_to_adjoint()
   {
-    // SPDE--GMRF prior with precision matrix (Lindgren, Rue & Lindstroem,
-    // 2011):
-    //   Q_SPDE = z * B_n^T * M^{-1} * B_n
-    // where B_n = A_kappa * (M^{-1} * A_kappa)^{n-1},
-    //       A_kappa = kappa^2 * M + G  (stiffness + scaled mass matrix),
-    //       n = alpha (SPDE operator power).
-    //
-    // Matern smoothness: nu = n - dim/2.
-    //   n=2, dim=3 -> nu=0.5 (continuous), n=3 -> nu=1.5 (differentiable)
-    //
-    // The gradient of the log-prior is:
-    //   nabla_x log p(x) = -z * B_n^T * M^{-1} * B_n * (x - mu)
-    // computed via:
-    //   1. Forward cascade:  w = B_n * (x - mu)        [n A_kappa, n-1
-    //   M-solves]
-    //   2. Middle solve:     u = M^{-1} * w             [1 M-solve]
-    //   3. Reverse cascade:  g = B_n^T * u              [n A_kappa, n-1
-    //   M-solves]
-    // Total: 2n sparse matvecs, 2n-1 mass solves.
-    //
-    // Hierarchical z update (conjugate Gamma hyper-prior z ~ Gamma(a0, b0)):
-    //   z = (a0 + n_dofs/2) / (b0 + 0.5 * w^T * u)
-    const unsigned int n = this->params.alpha;
-
-    this->pcout << "  SPDE prior: n=" << n << ", dim=" << dim
-                << ", nu=" << n - dim / 2.0 << std::endl;
-
-    const double a0 = 1e-9;
-    const double b0 = 1e-9;
-    const double a  = a0 + this->rf_dof_handler.n_dofs() / 2.0;
-
     const IndexSet &owned = this->rf_dof_handler.locally_owned_dofs();
-    TrilinosWrappers::MPI::Vector x_minus_mean, w, u, grad, temp;
+    TrilinosWrappers::MPI::Vector x_minus_mean, grad;
     x_minus_mean.reinit(owned, MPI_COMM_WORLD);
-    w.reinit(owned, MPI_COMM_WORLD);
-    u.reinit(owned, MPI_COMM_WORLD);
     grad.reinit(owned, MPI_COMM_WORLD);
-    temp.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
       x_minus_mean[idx] = this->x_vec_distributed[idx];
@@ -527,65 +492,24 @@ namespace darcy
 
     x_minus_mean.add(-1.0, this->mean_rf);
 
-    TrilinosWrappers::PreconditionJacobi mass_preconditioner;
-    mass_preconditioner.initialize(rf_mass_matrix);
+    // Markov prior: Q = G + nugget * M
+    //   grad log p(x) = -z * Q * (x - mu)
+    //   z = (a0 + n_dofs/2) / (b0 + q/2)  with q = (x-mu)^T Q (x-mu)
+    this->pcout << "  Markov prior (Laplacian + nugget)" << std::endl;
 
-    // -------------------------------------------------------------------
-    // Forward cascade: w = B_n * (x - mu)
-    //   B_n = A_kappa * (M^{-1} * A_kappa)^{n-1}
-    // -------------------------------------------------------------------
-    w = x_minus_mean;
-    for (unsigned int i = 0; i < n - 1; ++i)
-      {
-        this->rf_laplace_matrix.vmult(temp, w);
-        SolverControl solver_control(100, 1e-10 * temp.l2_norm());
-        SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
-        w = 0;
-        cg.solve(rf_mass_matrix, w, temp, mass_preconditioner);
-        this->pcout << "    Forward M^{-1} solve " << i + 1 << ": "
-                    << solver_control.last_step() << " CG iterations"
-                    << std::endl;
-      }
-    this->rf_laplace_matrix.vmult(temp, w);
-    w = temp;
+    this->rf_laplace_matrix.vmult(grad, x_minus_mean);
 
-    // -------------------------------------------------------------------
-    // Middle solve: u = M^{-1} * w
-    // -------------------------------------------------------------------
-    {
-      SolverControl solver_control(100, 1e-10 * w.l2_norm());
-      SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
-      u = 0;
-      cg.solve(rf_mass_matrix, u, w, mass_preconditioner);
-      this->pcout << "    Middle M^{-1} solve: " << solver_control.last_step()
-                  << " CG iterations" << std::endl;
-    }
+    const double n_dofs = this->rf_dof_handler.n_dofs();
+    const double q      = x_minus_mean * grad;
 
-    // -------------------------------------------------------------------
-    // Quadratic form: q = w^T * u = (B_n(x-mu))^T M^{-1} (B_n(x-mu))
-    // -------------------------------------------------------------------
-    const double quad_form = w * u;
-    const double b         = b0 + 0.5 * quad_form;
-    const double z         = a / b;
-    this->pcout << "  Precision scaling z = " << z
-                << " (quad_form = " << quad_form << ")" << std::endl;
+    const double a0 = 1e-9;
+    const double b0 = 1e-9;
+    const double a  = a0 + n_dofs / 2.0;
+    const double b  = b0 + 0.5 * q;
+    const double z  = a / b;
 
-    // -------------------------------------------------------------------
-    // Reverse cascade: grad = B_n^T * u
-    //   B_n^T = (A_kappa * M^{-1})^{n-1} * A_kappa  (A_kappa, M symmetric)
-    // -------------------------------------------------------------------
-    this->rf_laplace_matrix.vmult(grad, u);
-    for (unsigned int i = 0; i < n - 1; ++i)
-      {
-        SolverControl solver_control(100, 1e-10 * grad.l2_norm());
-        SolverCG<TrilinosWrappers::MPI::Vector> cg(solver_control);
-        temp = 0;
-        cg.solve(rf_mass_matrix, temp, grad, mass_preconditioner);
-        this->pcout << "    Reverse M^{-1} solve " << i + 1 << ": "
-                    << solver_control.last_step() << " CG iterations"
-                    << std::endl;
-        this->rf_laplace_matrix.vmult(grad, temp);
-      }
+    this->pcout << "  Precision scaling z = " << z << " (q = " << q
+                << ", n_dofs = " << n_dofs << ")" << std::endl;
 
     grad *= -z;
 
@@ -596,7 +520,8 @@ namespace darcy
                         MPI_COMM_WORLD,
                         grad_log_lik_x);
 
-    this->pcout << "Successfully added SPDE prior gradient to adjoint gradient!"
+    this->pcout << "Successfully added Markov prior gradient to adjoint "
+                   "gradient!"
                 << std::endl;
   }
 
@@ -627,7 +552,7 @@ namespace darcy
     data_out.add_data_vector(gradient_distributed, "gradient");
 
     MappingQ<dim> mapping(2);
-    data_out.build_patches(mapping, 2, DataOut<dim>::curved_inner_cells);
+    data_out.build_patches(mapping, 2, DataOut<dim>::curved_boundary);
 
     const std::string filename      = this->params.output_prefix + "gradient";
     const std::string stripped_path = this->params.output_directory + "/";
@@ -653,8 +578,10 @@ namespace darcy
     std::filesystem::path adjoint_data_path =
       input_path.parent_path() / this->params.adjoint_data_file;
 
+    std::vector<unsigned int> block_component(dim + 1, 0);
+    block_component[dim] = 1;
     const std::vector<types::global_dof_index> dofs_per_block =
-      DoFTools::count_dofs_per_fe_block(this->dof_handler, {0, 0, 0, 1});
+      DoFTools::count_dofs_per_fe_block(this->dof_handler, block_component);
     const types::global_dof_index n_u = dofs_per_block[0],
                                   n_p = dofs_per_block[1];
     std::vector<IndexSet> partitioning;
@@ -673,13 +600,15 @@ namespace darcy
                                         relevant_partitioning,
                                         MPI_COMM_WORLD);
 
-    this->read_input_npy();
+    if (this->params.ground_truth)
+      this->generate_ref_input();
+    else
+      this->read_input_npy();
     this->generate_coordinates();
     setup_point_evaluation_cache(); // Cache RPE for efficient RHS assembly
     read_upstream_gradient_npy(adjoint_data_path.string());
     read_primary_solution();
-    this->assemble_approx_schur_complement();
-    this->assemble_system();
+    this->assemble_system_and_schur();
     overwrite_adjoint_rhs();
     this->solve(adjoint_solve);
     final_inner_adjoint_product();
@@ -731,7 +660,7 @@ namespace darcy
     MappingQ<dim> mapping(2);
     data_out.build_patches(mapping,
                            this->degree_u,
-                           DataOut<dim>::curved_inner_cells);
+                           DataOut<dim>::curved_boundary);
 
     const std::string filename =
       this->params.output_prefix + "adjoint_solution";

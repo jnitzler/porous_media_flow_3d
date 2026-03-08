@@ -10,10 +10,9 @@
     "nugget": 1.0e-4
   },
   "Input/Output": {
-    "ground truth": true,
-    "input npy file": "/home/nitzler/workspace/QUEENS_Rep/queens_output_3d_paper/lf_mean.npy",
-    "output directory": "/home/nitzler/workspace/Own_dealii_projects/darcy_flow_3d_donut/output/ground_truth/",
-    "output prefix": "new_",
+    "input npy file": "dummy.npy",
+    "output directory": ".",
+    "output prefix": "",
     "adjoint data file": "adjoint_data.npy"
   }
 }

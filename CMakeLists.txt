@@ -23,3 +23,4 @@ endfunction()
 
 setup_executable("darcy_forward")
 setup_executable("darcy_adjoint")
+setup_executable("export_sparsity")

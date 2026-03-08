@@ -1,6 +1,6 @@
 # Isotropic Darcy flow
 
-This is a fully parallelized implementation of a Darcy flow PDE with a transverse isotropic permeability field, using deal.II. The governing equations that are solved read as follows:
+This is a fully parallelized implementation of a Darcy flow PDE with an isotropic permeability field on a 3D eccentric hyper-shell ("donut") geometry, using deal.II and Trilinos. The governing equations read:
 
 $$
 \begin{align*}
@@ -10,65 +10,58 @@ p &= g \quad \text{on } \partial\Omega
 \end{align*}
 $$
 
-With $K$ being a $\dim \times \dim$ permeability tensor, $\boldsymbol{u}$ the flow velocity and $p$ the pressure. We implemented a transverse isotropic permeability field $K(\boldsymbol{x})$, which is modeled by random fields, parameterized by a set of coefficients $\boldsymbol{x}$.
+With $K$ being a $\dim \times \dim$ permeability tensor, $\boldsymbol{u}$ the flow velocity and $p$ the pressure. The isotropic permeability field $K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$ is parameterized by random field coefficients $\boldsymbol{x}$.
 
-The project builds two executables:
-1. `darcy_forward.cc` → `darcy_forward`: The main executable and forward solve of the PDE for a specific choice of random field coefficients $\boldsymbol{x}$ which imposes the mapping: $\boldsymbol{y} = f(\boldsymbol{x})$
-2. `darcy_adjoint.cc` → `darcy_adjoint`: The associated adjoint problem that returns the derivative $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$ for an objective function $g$
+The project builds three executables:
+1. `darcy_forward`: Forward solve $\boldsymbol{y} = f(\boldsymbol{x})$ for given random field coefficients
+2. `darcy_adjoint`: Adjoint solve returning the gradient $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$
+3. `export_sparsity`: Exports the prior precision matrix sparsity pattern and values (COO format as `.npy` files). This is needed to construct a sparse variational approximation in the stochastic variational inference (SVI) framework — the FE mesh-induced sparsity pattern of $Q$ motivates the sparsity structure of the variational precision matrix, ensuring the approximation respects the local correlation structure of the prior.
 
-## Random permeability field
-The random isotropic permeability tensor $K(\boldsymbol{x})$ is modeled as follows:
-
-$$K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$$
-
-such that $\boldsymbol{x}$ can be inferred without constraints.
+Both the forward and adjoint executables support 2D and 3D via the `spatial dimension` parameter.
 
 ## Configuration
-The executables use deal.II's `ParameterHandler` to read configuration from a JSON or PRM file.
+
+The executables use deal.II's `ParameterHandler` to read configuration from a JSON file.
 
 ### Parameters
 
 | Parameter | Section | Default | Description |
 |---|---|---|---|
+| `spatial dimension` | Discretization | 3 | Spatial dimension (2 or 3) |
 | `pressure fe degree` | Discretization | 1 | Polynomial degree for pressure FE (velocity = degree + 1) |
 | `random field fe degree` | Discretization | 2 | Polynomial degree for random field FE |
 | `refinement level` | Discretization | 4 | Global mesh refinement level |
 | `refinement level obs` | Discretization | 3 | Observation mesh refinement level |
-| `alpha` | Prior | 2 | SPDE operator power $n$: Matérn smoothness $\nu = n - d/2$. Use $n \geq 2$ for 3D |
-| `kappa squared` | Prior | 16.0 | Controls prior correlation length: $\rho = \sqrt{8\nu}/\kappa$ |
+| `nugget` | Prior | 1e-6 | Nugget for Markov prior: $Q = G + \varepsilon M$ |
+| `ground truth` | Input/Output | false | Use analytical reference field instead of reading from file |
 | `input npy file` | Input/Output | — | Path to random field coefficients (.npy) |
 | `output directory` | Input/Output | `output` | Results directory |
 | `output prefix` | Input/Output | `""` | Filename prefix for outputs |
 | `adjoint data file` | Input/Output | `adjoint_data.npy` | Upstream gradient filename (adjoint only) |
 
-### SPDE prior parameters
+### Prior
 
-The adjoint solver uses an SPDE--GMRF prior (Lindgren, Rue & Lindström, 2011) with precision matrix $Q = z \, B_n^T M^{-1} B_n$, where $B_n = A_\kappa (M^{-1} A_\kappa)^{n-1}$ and $A_\kappa = \kappa^2 M + G$. The key parameters are:
-- **`alpha`** ($n$): SPDE operator power. Determines Matérn smoothness $\nu = n - d/2$. In 3D, $n=2$ gives $\nu=1/2$ (continuous paths), $n=3$ gives $\nu=3/2$ (differentiable). Must be $\geq 2$ for valid 3D fields.
-- **`kappa squared`** ($\kappa^2$): Controls the practical correlation length $\rho = \sqrt{8\nu}/\kappa$. Examples for $n=2$ ($\nu=0.5$) on the donut domain (outer radius 1.0):
+The adjoint solver uses a Markov prior with precision matrix $Q = G + \varepsilon M$, where $G$ is the stiffness (Laplacian) matrix, $M$ the mass matrix, and $\varepsilon$ the nugget term. The precision scaling $z$ is updated adaptively via a conjugate Gamma hyper-prior (Student-t-like behavior):
 
-  | $\kappa^2$ | $\rho$ | Interpretation |
-  |---|---|---|
-  | 4.0 | 1.0 | Full domain extent |
-  | 16.0 | 0.5 | Half the outer radius |
-  | 64.0 | 0.25 | Local features |
+$$z = \frac{a_0 + n/2}{b_0 + \frac{1}{2}(\boldsymbol{x} - \boldsymbol{\mu})^T Q (\boldsymbol{x} - \boldsymbol{\mu})}$$
 
 ### Example JSON configuration
 
 ```json
 {
   "Discretization": {
+    "spatial dimension": 3,
     "pressure fe degree": 1,
     "random field fe degree": 2,
     "refinement level": 4,
     "refinement level obs": 3
   },
   "Prior": {
-    "alpha": 2,
-    "kappa squared": 16.0
+    "nugget": 1.0e-4
   },
   "Input/Output": {
-    "input npy file": "input/markov_field_5.npy",
+    "ground truth": false,
+    "input npy file": "input/coefficients.npy",
     "output directory": "output",
     "output prefix": "my_sim_",
     "adjoint data file": "adjoint_data.npy"
@@ -77,22 +70,36 @@ The adjoint solver uses an SPDE--GMRF prior (Lindgren, Rue & Lindström, 2011) w
 ```
 
 ## Running the executables
-The primary problem can be started with:
+
+The forward problem:
 ```bash
 mpirun -np <num_procs> darcy_forward parameters.json
 ```
 
-The associated adjoint problem:
+The adjoint problem:
 ```bash
 mpirun -np <num_procs> darcy_adjoint parameters.json
 ```
 
-Note: The `adjoint_data.npy` file should be located in the same directory as the input npy file specified in the parameter file.
+The adjoint requires the forward solution (`*_solution_full.npy`) and an upstream gradient file (`adjoint_data.npy` in the same directory as `input npy file`).
 
 ## Setup, installation and dependencies
 
-This code requires the installation and setup of [deal.II](https://www.dealii.org/), furthermore, the [Trilinos](https://trilinos.github.io/) project needs to be configured and installed. For parallel computing, respectively partitioning we furthermore require the installation of 
-[p4est](pymc.io/projects/examples/en/latest/gallery.html). 
+This code requires:
+- [deal.II](https://www.dealii.org/) >= 9.5.0 (with Trilinos and p4est enabled)
+- [Trilinos](https://trilinos.github.io/)
+- [p4est](https://www.p4est.org/) for parallel mesh partitioning
+- MPI
+
+### Building
+
+The project uses out-of-source CMake builds:
+
+```bash
+mkdir -p build/release && cd build/release
+cmake -DDEAL_II_DIR=/path/to/dealii-install -DCMAKE_BUILD_TYPE=Release ../..
+make -j$(nproc)
+```
 
 ## Associated deal.II tutorials
 
