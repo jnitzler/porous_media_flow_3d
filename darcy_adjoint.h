@@ -482,8 +482,10 @@ namespace darcy
   DarcyAdjoint<dim>::add_prior_gradient_to_adjoint()
   {
     const IndexSet &owned = this->rf_dof_handler.locally_owned_dofs();
-    TrilinosWrappers::MPI::Vector x_minus_mean, grad;
+    TrilinosWrappers::MPI::Vector x_minus_mean, Qr, w, grad;
     x_minus_mean.reinit(owned, MPI_COMM_WORLD);
+    Qr.reinit(owned, MPI_COMM_WORLD);
+    w.reinit(owned, MPI_COMM_WORLD);
     grad.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
@@ -492,12 +494,25 @@ namespace darcy
 
     x_minus_mean.add(-1.0, this->mean_rf);
 
-    // Markov prior: Q = G + nugget * M
-    //   grad log p(x) = -z * Q * (x - mu)
-    //   z = (a0 + n_dofs/2) / (b0 + q/2)  with q = (x-mu)^T Q (x-mu)
-    this->pcout << "  Markov prior (Laplacian + nugget)" << std::endl;
+    // SPDE prior: precision = Q M^{-1} Q (where Q = G + nugget * M)
+    //   grad log p(x) = -z * Q * M^{-1} * Q * (x - mu)
+    //   z = (a0 + n_dofs/2) / (b0 + q/2)  with q = (x-mu)^T Q M^{-1} Q (x-mu)
+    this->pcout << "  SPDE prior (Q M^{-1} Q)" << std::endl;
 
-    this->rf_laplace_matrix.vmult(grad, x_minus_mean);
+    // Step 1: Qr = Q * (x - mu)
+    this->rf_laplace_matrix.vmult(Qr, x_minus_mean);
+
+    // Step 2: w = M^{-1} * Qr  (mass matrix solve, very well-conditioned)
+    TrilinosWrappers::PreconditionJacobi mass_preconditioner;
+    mass_preconditioner.initialize(rf_mass_matrix);
+    SolverControl mass_control(200, 1e-12 * Qr.l2_norm());
+    SolverCG<TrilinosWrappers::MPI::Vector> mass_solver(mass_control);
+    mass_solver.solve(rf_mass_matrix, w, Qr, mass_preconditioner);
+    this->pcout << "  Mass solve: " << mass_control.last_step()
+                << " CG iterations" << std::endl;
+
+    // Step 3: grad = Q * w = Q * M^{-1} * Q * (x - mu)
+    this->rf_laplace_matrix.vmult(grad, w);
 
     const double n_dofs = this->rf_dof_handler.n_dofs();
     const double q      = x_minus_mean * grad;
