@@ -511,6 +511,16 @@ namespace darcy
     this->pcout << "  Precision scaling z = " << z << " (q = " << q
                 << ", n_dofs = " << n_dofs << ")" << std::endl;
 
+    // Write prior metadata [z, q, n_dofs] for Python-side ELBO correction
+    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      {
+        std::vector<double> prior_meta = {z, q, n_dofs};
+        const std::string   meta_file  = this->params.output_directory + "/" +
+                                      this->params.output_prefix +
+                                      "prior_meta.npy";
+        this->write_data_to_npy(meta_file, prior_meta, 3, 1);
+      }
+
     grad *= -z;
 
     for (const auto idx : owned)

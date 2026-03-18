@@ -12,10 +12,11 @@ $$
 
 With $K$ being a $\dim \times \dim$ permeability tensor, $\boldsymbol{u}$ the flow velocity and $p$ the pressure. The isotropic permeability field $K(\boldsymbol{x}) = \exp(\boldsymbol{x}) \cdot I$ is parameterized by random field coefficients $\boldsymbol{x}$.
 
-The project builds three executables:
+The project builds four executables:
 1. `darcy_forward`: Forward solve $\boldsymbol{y} = f(\boldsymbol{x})$ for given random field coefficients
 2. `darcy_adjoint`: Adjoint solve returning the gradient $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$
 3. `export_sparsity`: Exports the prior precision matrix sparsity pattern and values (COO format as `.npy` files). This is needed to construct a sparse variational approximation in the stochastic variational inference (SVI) framework — the FE mesh-induced sparsity pattern of $Q$ motivates the sparsity structure of the variational precision matrix, ensuring the approximation respects the local correlation structure of the prior.
+4. `sample_prior`: Draws samples from the GMRF prior $\boldsymbol{x} \sim \mathcal{N}(0, Q^{-1})$ by solving $Q \boldsymbol{z} = \boldsymbol{w}$ with $\boldsymbol{w} \sim \mathcal{N}(0, I)$. Useful for visualizing and diagnosing the prior field.
 
 Both the forward and adjoint executables support 2D and 3D via the `spatial dimension` parameter.
 
@@ -82,6 +83,11 @@ mpirun -np <num_procs> darcy_adjoint parameters.json
 ```
 
 The adjoint requires the forward solution (`*_solution_full.npy`) and an upstream gradient file (`adjoint_data.npy` in the same directory as `input npy file`).
+
+Sampling from the prior:
+```bash
+mpirun -np <num_procs> ./sample_prior parameters.json --num-samples 10 --output-dir output/samples/ [--seed 42]
+```
 
 ## Setup, installation and dependencies
 

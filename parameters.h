@@ -29,6 +29,7 @@ namespace darcy
 
     // Input/Output
     bool        ground_truth;
+    bool        export_random_field;
     std::string input_npy_file;
     std::string output_directory;
     std::string output_prefix;
@@ -99,6 +100,13 @@ namespace darcy
         "If true, use the analytical reference field (RefScalar) "
         "instead of reading from the input npy file");
 
+      prm.declare_entry(
+        "export random field",
+        "false",
+        Patterns::Bool(),
+        "If true, export the random field (log-permeability) DOF vector "
+        "as a .npy file. Use for ground truth generation.");
+
       prm.declare_entry("input npy file",
                         "input/markov_field_5.npy",
                         Patterns::FileName(),
@@ -147,11 +155,12 @@ namespace darcy
 
     prm.enter_subsection("Input/Output");
     {
-      ground_truth      = prm.get_bool("ground truth");
-      input_npy_file    = prm.get("input npy file");
-      output_directory  = prm.get("output directory");
-      output_prefix     = prm.get("output prefix");
-      adjoint_data_file = prm.get("adjoint data file");
+      ground_truth        = prm.get_bool("ground truth");
+      export_random_field = prm.get_bool("export random field");
+      input_npy_file      = prm.get("input npy file");
+      output_directory    = prm.get("output directory");
+      output_prefix       = prm.get("output prefix");
+      adjoint_data_file   = prm.get("adjoint data file");
     }
     prm.leave_subsection();
   }

@@ -7,7 +7,7 @@
     "refinement level obs": 3
   },
   "Prior": {
-    "nugget": 1.0e-4
+    "nugget": 1.0e-6
   },
   "Input/Output": {
     "input npy file": "dummy.npy",

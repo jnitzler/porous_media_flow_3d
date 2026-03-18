@@ -11,6 +11,7 @@
   },
   "Input/Output": {
     "ground truth": true,
+    "export random field": true,
     "input npy file": "/home/nitzler/workspace/QUEENS_Rep/queens_output_3d_paper/lf_mean.npy",
     "output directory": "/home/nitzler/workspace/Own_dealii_projects/darcy_flow_3d_donut/output/ground_truth/",
     "output prefix": "new_",
