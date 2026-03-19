@@ -26,7 +26,7 @@ mpirun --bind-to core --map-by core -np ${SLURM_NTASKS} ${EXE} ${INPUT}
 RC=$?
 echo
 echo "export_sparsity finished with exit code ${RC} at: $(date)"
-ls -lh rf_sparsity_*.npy rf_A_kappa_values.npy 2>/dev/null
+ls -lh rf_sparsity_*.npy rf_A_kappa_values.npy rf_mass_lumped_diag.npy 2>/dev/null
 
 if [ ${RC} -eq 0 ]; then
   echo
