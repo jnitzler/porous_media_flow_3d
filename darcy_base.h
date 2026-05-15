@@ -129,7 +129,8 @@ namespace darcy
     // Solver
     // -------------------------------------------------------------------------
     void
-    solve(const bool solve_adjoint = false); // GMRES with block preconditioner
+    solve(); // GMRES with block preconditioner (system is symmetric, so the
+             // same call serves both the forward and adjoint solves)
 
     // -------------------------------------------------------------------------
     // Input methods
@@ -734,47 +735,9 @@ namespace darcy
                                       MPI_COMM_WORLD);
   }
 
-  template <typename MatrixType>
-  class TransposeOperator : public EnableObserverPointer
-  {
-  public:
-    TransposeOperator(const MatrixType &matrix)
-      : matrix(matrix)
-    {}
-
-    template <typename VectorType>
-    void
-    vmult(VectorType &dst, const VectorType &src) const
-    {
-      matrix.Tvmult(dst, src);
-    }
-
-    template <typename VectorType>
-    void
-    Tvmult(VectorType &dst, const VectorType &src) const
-    {
-      matrix.vmult(dst, src);
-    }
-
-    types::global_dof_index
-    m() const
-    {
-      return matrix.n();
-    }
-
-    types::global_dof_index
-    n() const
-    {
-      return matrix.m();
-    }
-
-  private:
-    const MatrixType &matrix;
-  };
-
   template <int dim>
   void
-  DarcyBase<dim>::solve(const bool adjoint_solve)
+  DarcyBase<dim>::solve()
   {
     TimerOutput::Scope timer_section(this->computing_timer, "   Solve system");
     const auto        &M    = this->system_matrix.block(0, 0);
@@ -836,26 +799,14 @@ namespace darcy
     this->pcout << "Starting iterative solver..." << std::endl;
     {
       TimerOutput::Scope timer_section(this->computing_timer, "   Solve gmres");
-      if (adjoint_solve)
-        {
-          TransposeOperator<decltype(this->system_matrix)> system_transposed(
-            this->system_matrix);
-
-          TransposeOperator<decltype(block_preconditioner)>
-            preconditioner_transposed(block_preconditioner);
-
-          solver_system.solve(system_transposed,
-                              distributed_solution,
-                              this->system_rhs,
-                              preconditioner_transposed);
-        }
-      else
-        {
-          solver_system.solve(this->system_matrix,
-                              distributed_solution,
-                              this->system_rhs,
-                              block_preconditioner);
-        }
+      // The Darcy saddle-point system A is symmetric (integration-by-parts
+      // boundary terms in assemble_system_and_schur make the off-diagonals
+      // match), so the adjoint solve A^T lambda = g is identical to the
+      // forward solve with a different RHS — no transposed operator needed.
+      solver_system.solve(this->system_matrix,
+                          distributed_solution,
+                          this->system_rhs,
+                          block_preconditioner);
     }
     this->constraints.distribute(distributed_solution);
     this->solution = distributed_solution;

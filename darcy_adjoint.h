@@ -610,8 +610,6 @@ namespace darcy
   void
   DarcyAdjoint<dim>::run_simulation()
   {
-    const bool adjoint_solve = true;
-
     this->setup_grid_and_dofs();
 
     // Construct full path to adjoint data file
@@ -652,7 +650,7 @@ namespace darcy
     read_primary_solution();
     this->assemble_system_and_schur();
     overwrite_adjoint_rhs();
-    this->solve(adjoint_solve);
+    this->solve();
     final_inner_adjoint_product();
     create_rf_laplace_operator();
     add_prior_gradient_to_adjoint();
