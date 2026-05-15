@@ -26,6 +26,9 @@ namespace darcy
 
     // Prior
     double nugget;
+    bool   fixed_prior_precision; // If true, skip EM and use fixed z
+    double prior_precision_value; // Fixed value of z = a/b (only used when
+                                  // fixed_prior_precision=true)
 
     // Input/Output
     bool        ground_truth;
@@ -88,6 +91,20 @@ namespace darcy
                         Patterns::Double(0),
                         "Nugget term for Markov prior: Q = G + nugget*M. "
                         "Small positive value for positive-definiteness.");
+
+      prm.declare_entry(
+        "fixed prior precision",
+        "false",
+        Patterns::Bool(),
+        "If true, skip the EM/marginalisation step and use "
+        "prior_precision_value as a fixed precision scaling z. "
+        "If false (default), z is computed via z = (a0+d/2)/(b0+q/2).");
+
+      prm.declare_entry("prior precision value",
+                        "1.0",
+                        Patterns::Double(0),
+                        "Fixed value for the prior precision scaling z = a/b. "
+                        "Only used when 'fixed prior precision' is true.");
     }
     prm.leave_subsection();
 
@@ -149,7 +166,9 @@ namespace darcy
 
     prm.enter_subsection("Prior");
     {
-      nugget = prm.get_double("nugget");
+      nugget                = prm.get_double("nugget");
+      fixed_prior_precision = prm.get_bool("fixed prior precision");
+      prior_precision_value = prm.get_double("prior precision value");
     }
     prm.leave_subsection();
 

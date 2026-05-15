@@ -505,7 +505,7 @@ namespace darcy
     // Step 2: w = M^{-1} * Qr  (mass matrix solve, very well-conditioned)
     TrilinosWrappers::PreconditionJacobi mass_preconditioner;
     mass_preconditioner.initialize(rf_mass_matrix);
-    SolverControl mass_control(200, 1e-12 * Qr.l2_norm());
+    SolverControl mass_control(200, 1e-6 * Qr.l2_norm());
     SolverCG<TrilinosWrappers::MPI::Vector> mass_solver(mass_control);
     mass_solver.solve(rf_mass_matrix, w, Qr, mass_preconditioner);
     this->pcout << "  Mass solve: " << mass_control.last_step()
@@ -517,14 +517,30 @@ namespace darcy
     const double n_dofs = this->rf_dof_handler.n_dofs();
     const double q      = x_minus_mean * grad;
 
-    const double a0 = 1e-9;
-    const double b0 = 1e-9;
-    const double a  = a0 + n_dofs / 2.0;
-    const double b  = b0 + 0.5 * q;
-    const double z  = a / b;
-
-    this->pcout << "  Precision scaling z = " << z << " (q = " << q
-                << ", n_dofs = " << n_dofs << ")" << std::endl;
+    double z;
+    if (this->params.fixed_prior_precision)
+      {
+        z = this->params.prior_precision_value;
+        this->pcout << "  Precision scaling z = " << z << " (fixed, q = " << q
+                    << ", n_dofs = " << n_dofs << ")" << std::endl;
+      }
+    else
+      {
+        const double a0 = 1e-9;
+        const double b0 = 1e-9;
+        const double a =
+          a0 + n_dofs / 2.0; // VB EM baseline: full parameter count n
+        // MacKay/RVM evidence approx (disabled): use N_obs as effective
+        // data-informed DoF count. Required under degenerate alpha*I
+        // variational family where tr(A*Sigma_q) ~ 0 and the baseline's trace
+        // stabilizer is missing, so n must be replaced by N_obs by hand. const
+        // double n_obs = static_cast<double>(adjoint_data_vec.size()); const
+        // double a     = a0 + n_obs / 2.0;
+        const double b = b0 + 0.5 * q;
+        z              = a / b;
+        this->pcout << "  Precision scaling z = " << z << " (EM, q = " << q
+                    << ", n_dofs = " << n_dofs << ")" << std::endl;
+      }
 
     // Write prior metadata [z, q, n_dofs] for Python-side ELBO correction
     if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)

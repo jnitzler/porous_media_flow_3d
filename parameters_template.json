@@ -7,7 +7,9 @@
     "refinement level obs": 3
   },
   "Prior": {
-    "nugget": 1.0e-6
+    "nugget": 1.0e-4,
+    "fixed prior precision": false,
+    "prior precision value": 1650
   },
   "Input/Output": {
     "ground truth": false,
