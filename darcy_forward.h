@@ -427,6 +427,43 @@ namespace darcy
     output_velocity_at_observation_points_npy();
     output_spatial_coordinates_npy();
 
+    // Export random field (log-permeability) DOF vector as .npy
+    if (this->params.export_random_field)
+      {
+        const unsigned int n_rf_dofs = this->rf_dof_handler.n_dofs();
+        const IndexSet    &owned = this->rf_dof_handler.locally_owned_dofs();
+
+        // Scatter owned entries into a local buffer
+        std::vector<double> local_rf(n_rf_dofs, 0.0);
+        for (const auto idx : owned)
+          local_rf[idx] = this->x_vec[idx];
+
+        // Gather to rank 0 via MPI_Reduce
+        std::vector<double> global_rf;
+        if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+          global_rf.resize(n_rf_dofs, 0.0);
+        else
+          global_rf.resize(1);
+
+        MPI_Reduce(local_rf.data(),
+                   global_rf.data(),
+                   n_rf_dofs,
+                   MPI_DOUBLE,
+                   MPI_SUM,
+                   0,
+                   MPI_COMM_WORLD);
+
+        if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+          {
+            const std::string filename = this->params.output_directory + "/" +
+                                         this->params.output_prefix +
+                                         "random_field.npy";
+            this->pcout << "Writing random field (" << n_rf_dofs
+                        << " DOFs) to: " << filename << std::endl;
+            this->write_data_to_npy(filename, global_rf, n_rf_dofs, 1);
+          }
+      }
+
   } // end run simulation
 
 } // namespace darcy

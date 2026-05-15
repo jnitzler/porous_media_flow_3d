@@ -14,7 +14,6 @@
 #include <deal.II/numerics/rtree.h>
 #include <filesystem>
 #include <map>
-#include <unordered_map>
 
 #include "darcy_base.h"
 
@@ -482,8 +481,10 @@ namespace darcy
   DarcyAdjoint<dim>::add_prior_gradient_to_adjoint()
   {
     const IndexSet &owned = this->rf_dof_handler.locally_owned_dofs();
-    TrilinosWrappers::MPI::Vector x_minus_mean, grad;
+    TrilinosWrappers::MPI::Vector x_minus_mean, Qr, w, grad;
     x_minus_mean.reinit(owned, MPI_COMM_WORLD);
+    Qr.reinit(owned, MPI_COMM_WORLD);
+    w.reinit(owned, MPI_COMM_WORLD);
     grad.reinit(owned, MPI_COMM_WORLD);
 
     for (const auto idx : owned)
@@ -492,24 +493,65 @@ namespace darcy
 
     x_minus_mean.add(-1.0, this->mean_rf);
 
-    // Markov prior: Q = G + nugget * M
-    //   grad log p(x) = -z * Q * (x - mu)
-    //   z = (a0 + n_dofs/2) / (b0 + q/2)  with q = (x-mu)^T Q (x-mu)
-    this->pcout << "  Markov prior (Laplacian + nugget)" << std::endl;
+    // SPDE prior: precision = Q M^{-1} Q (where Q = G + nugget * M)
+    //   grad log p(x) = -z * Q * M^{-1} * Q * (x - mu)
+    //   z = (a0 + n_dofs/2) / (b0 + q/2)  with q = (x-mu)^T Q M^{-1} Q (x-mu)
+    this->pcout << "  SPDE prior (Q M^{-1} Q)" << std::endl;
 
-    this->rf_laplace_matrix.vmult(grad, x_minus_mean);
+    // Step 1: Qr = Q * (x - mu)
+    this->rf_laplace_matrix.vmult(Qr, x_minus_mean);
+
+    // Step 2: w = M^{-1} * Qr  (mass matrix solve, very well-conditioned)
+    TrilinosWrappers::PreconditionJacobi mass_preconditioner;
+    mass_preconditioner.initialize(rf_mass_matrix);
+    SolverControl mass_control(200, 1e-6 * Qr.l2_norm());
+    SolverCG<TrilinosWrappers::MPI::Vector> mass_solver(mass_control);
+    mass_solver.solve(rf_mass_matrix, w, Qr, mass_preconditioner);
+    this->pcout << "  Mass solve: " << mass_control.last_step()
+                << " CG iterations" << std::endl;
+
+    // Step 3: grad = Q * w = Q * M^{-1} * Q * (x - mu)
+    this->rf_laplace_matrix.vmult(grad, w);
 
     const double n_dofs = this->rf_dof_handler.n_dofs();
     const double q      = x_minus_mean * grad;
 
-    const double a0 = 1e-9;
-    const double b0 = 1e-9;
-    const double a  = a0 + n_dofs / 2.0;
-    const double b  = b0 + 0.5 * q;
-    const double z  = a / b;
+    double z;
+    if (this->params.fixed_prior_precision)
+      {
+        z = this->params.prior_precision_value;
+        this->pcout << "  Precision scaling z = " << z << " (fixed, q = " << q
+                    << ", n_dofs = " << n_dofs << ")" << std::endl;
+      }
+    else
+      {
+        const double a0 = 1e-9;
+        const double b0 = 1e-9;
+        // VB EM baseline: full parameter count n in the numerator.
+        const double a = a0 + n_dofs / 2.0;
+        // Alternative kept for the MAP comparison study (MacKay/RVM evidence
+        // approximation): use N_obs as the effective data-informed DoF count.
+        // Required under a degenerate alpha*I variational family where
+        // tr(A*Sigma_q) ~ 0 and the baseline's trace stabilizer is missing,
+        // so n must be replaced by N_obs by hand. Swap the `a` definition
+        // above with the two lines below to activate.
+        //   const double n_obs = static_cast<double>(adjoint_data_vec.size());
+        //   const double a     = a0 + n_obs / 2.0;
+        const double b = b0 + 0.5 * q;
+        z              = a / b;
+        this->pcout << "  Precision scaling z = " << z << " (EM, q = " << q
+                    << ", n_dofs = " << n_dofs << ")" << std::endl;
+      }
 
-    this->pcout << "  Precision scaling z = " << z << " (q = " << q
-                << ", n_dofs = " << n_dofs << ")" << std::endl;
+    // Write prior metadata [z, q, n_dofs] for Python-side ELBO correction
+    if (Utilities::MPI::this_mpi_process(MPI_COMM_WORLD) == 0)
+      {
+        std::vector<double> prior_meta = {z, q, n_dofs};
+        const std::string   meta_file  = this->params.output_directory + "/" +
+                                      this->params.output_prefix +
+                                      "prior_meta.npy";
+        this->write_data_to_npy(meta_file, prior_meta, 3, 1);
+      }
 
     grad *= -z;
 
@@ -568,8 +610,6 @@ namespace darcy
   void
   DarcyAdjoint<dim>::run_simulation()
   {
-    const bool adjoint_solve = true;
-
     this->setup_grid_and_dofs();
 
     // Construct full path to adjoint data file
@@ -610,7 +650,7 @@ namespace darcy
     read_primary_solution();
     this->assemble_system_and_schur();
     overwrite_adjoint_rhs();
-    this->solve(adjoint_solve);
+    this->solve();
     final_inner_adjoint_product();
     create_rf_laplace_operator();
     add_prior_gradient_to_adjoint();
@@ -676,8 +716,8 @@ namespace darcy
                                         n_digits_counter,
                                         num_vtu_files);
 
-    this->pcout << "DEBUG: Wrote adjoint solution to " << stripped_path
-                << filename << ".pvtu" << std::endl;
+    this->pcout << "Wrote adjoint solution to " << stripped_path << filename
+                << ".pvtu" << std::endl;
   }
 
   template <int dim>

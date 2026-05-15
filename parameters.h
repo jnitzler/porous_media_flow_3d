@@ -26,9 +26,13 @@ namespace darcy
 
     // Prior
     double nugget;
+    bool   fixed_prior_precision; // If true, skip EM and use fixed z
+    double prior_precision_value; // Fixed value of z = a/b (only used when
+                                  // fixed_prior_precision=true)
 
     // Input/Output
     bool        ground_truth;
+    bool        export_random_field;
     std::string input_npy_file;
     std::string output_directory;
     std::string output_prefix;
@@ -87,6 +91,20 @@ namespace darcy
                         Patterns::Double(0),
                         "Nugget term for Markov prior: Q = G + nugget*M. "
                         "Small positive value for positive-definiteness.");
+
+      prm.declare_entry(
+        "fixed prior precision",
+        "false",
+        Patterns::Bool(),
+        "If true, skip the EM/marginalisation step and use "
+        "prior_precision_value as a fixed precision scaling z. "
+        "If false (default), z is computed via z = (a0+d/2)/(b0+q/2).");
+
+      prm.declare_entry("prior precision value",
+                        "1.0",
+                        Patterns::Double(0),
+                        "Fixed value for the prior precision scaling z = a/b. "
+                        "Only used when 'fixed prior precision' is true.");
     }
     prm.leave_subsection();
 
@@ -98,6 +116,13 @@ namespace darcy
         Patterns::Bool(),
         "If true, use the analytical reference field (RefScalar) "
         "instead of reading from the input npy file");
+
+      prm.declare_entry(
+        "export random field",
+        "false",
+        Patterns::Bool(),
+        "If true, export the random field (log-permeability) DOF vector "
+        "as a .npy file. Use for ground truth generation.");
 
       prm.declare_entry("input npy file",
                         "input/markov_field_5.npy",
@@ -141,17 +166,20 @@ namespace darcy
 
     prm.enter_subsection("Prior");
     {
-      nugget = prm.get_double("nugget");
+      nugget                = prm.get_double("nugget");
+      fixed_prior_precision = prm.get_bool("fixed prior precision");
+      prior_precision_value = prm.get_double("prior precision value");
     }
     prm.leave_subsection();
 
     prm.enter_subsection("Input/Output");
     {
-      ground_truth      = prm.get_bool("ground truth");
-      input_npy_file    = prm.get("input npy file");
-      output_directory  = prm.get("output directory");
-      output_prefix     = prm.get("output prefix");
-      adjoint_data_file = prm.get("adjoint data file");
+      ground_truth        = prm.get_bool("ground truth");
+      export_random_field = prm.get_bool("export random field");
+      input_npy_file      = prm.get("input npy file");
+      output_directory    = prm.get("output directory");
+      output_prefix       = prm.get("output prefix");
+      adjoint_data_file   = prm.get("adjoint data file");
     }
     prm.leave_subsection();
   }

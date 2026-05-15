@@ -32,6 +32,7 @@
 #include <deal.II/lac/sparsity_tools.h>
 #include <deal.II/lac/trilinos_sparse_matrix.h>
 #include <deal.II/lac/trilinos_sparsity_pattern.h>
+#include <deal.II/lac/trilinos_vector.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <iostream>
 #include <string>
@@ -153,11 +154,12 @@ run_export_sparsity(const darcy::Parameters &params)
   rf_laplace_matrix.add(nugget, rf_mass_matrix);
   pcout << "Assembled Q = G + " << nugget << " * M" << std::endl;
 
-  // Extract lower-triangular COO entries and A_kappa values for locally
+  // Extract lower-triangular COO entries, Q values, and M values for locally
   // owned rows (each DOF is owned by exactly one rank, so no duplicates)
   std::vector<double> local_row_idx;
   std::vector<double> local_col_idx;
   std::vector<double> local_values;
+  std::vector<double> local_mass_values;
 
   for (const auto row : locally_owned)
     {
@@ -168,6 +170,7 @@ run_export_sparsity(const darcy::Parameters &params)
               local_row_idx.push_back(static_cast<double>(row));
               local_col_idx.push_back(static_cast<double>(it->column()));
               local_values.push_back(rf_laplace_matrix.el(row, it->column()));
+              local_mass_values.push_back(rf_mass_matrix.el(row, it->column()));
             }
         }
     }
@@ -188,10 +191,11 @@ run_export_sparsity(const darcy::Parameters &params)
         total_nnz += all_nnz[i];
       }
 
-  // Gather all COO entries and values onto rank 0
+  // Gather all COO entries, Q values, and M values onto rank 0
   std::vector<double> global_row_idx(this_mpi_process == 0 ? total_nnz : 0);
   std::vector<double> global_col_idx(this_mpi_process == 0 ? total_nnz : 0);
   std::vector<double> global_values(this_mpi_process == 0 ? total_nnz : 0);
+  std::vector<double> global_mass_values(this_mpi_process == 0 ? total_nnz : 0);
 
   MPI_Gatherv(local_row_idx.data(),
               local_nnz,
@@ -223,7 +227,17 @@ run_export_sparsity(const darcy::Parameters &params)
               0,
               MPI_COMM_WORLD);
 
-  // Write COO indices and A_kappa values as npy files (rank 0 only)
+  MPI_Gatherv(local_mass_values.data(),
+              local_nnz,
+              MPI_DOUBLE,
+              global_mass_values.data(),
+              all_nnz.data(),
+              displs.data(),
+              MPI_DOUBLE,
+              0,
+              MPI_COMM_WORLD);
+
+  // Write COO indices, Q values, and M values as npy files (rank 0 only)
   if (this_mpi_process == 0)
     {
       const auto nnz = static_cast<unsigned long>(total_nnz);
@@ -248,12 +262,52 @@ run_export_sparsity(const darcy::Parameters &params)
                             shape.data(),
                             global_values);
 
+      npy::SaveArrayAsNumpy("rf_mass_values.npy",
+                            fortran_order,
+                            shape.size(),
+                            shape.data(),
+                            global_mass_values);
+
       pcout << "Number of lower-triangular nonzeros: " << total_nnz
             << std::endl;
       pcout << "Average entries per row: "
             << static_cast<double>(total_nnz) / n_dofs << std::endl;
       pcout << "Wrote rf_sparsity_row_idx.npy, rf_sparsity_col_idx.npy, "
-               "and rf_A_kappa_values.npy"
+               "rf_A_kappa_values.npy, and rf_mass_values.npy"
+            << std::endl;
+    }
+
+  // Export lumped mass diagonal: M_lumped = M @ ones (row sums of M).
+  // Used for SPDE prior quadratic form q = (Qx)^T M_lumped^{-1} (Qx).
+  TrilinosWrappers::MPI::Vector ones(locally_owned, MPI_COMM_WORLD);
+  ones = 1.0;
+  TrilinosWrappers::MPI::Vector lumped(locally_owned, MPI_COMM_WORLD);
+  rf_mass_matrix.vmult(lumped, ones);
+
+  // Gather lumped mass to rank 0
+  std::vector<double> local_lumped(n_dofs, 0.0);
+  for (const auto idx : locally_owned)
+    local_lumped[idx] = lumped[idx];
+
+  std::vector<double> global_lumped(this_mpi_process == 0 ? n_dofs : 1, 0.0);
+  MPI_Reduce(local_lumped.data(),
+             global_lumped.data(),
+             n_dofs,
+             MPI_DOUBLE,
+             MPI_SUM,
+             0,
+             MPI_COMM_WORLD);
+
+  if (this_mpi_process == 0)
+    {
+      const std::vector<long unsigned> shape_lumped{
+        static_cast<unsigned long>(n_dofs), 1};
+      npy::SaveArrayAsNumpy("rf_mass_lumped_diag.npy",
+                            false,
+                            shape_lumped.size(),
+                            shape_lumped.data(),
+                            global_lumped);
+      pcout << "Wrote rf_mass_lumped_diag.npy (" << n_dofs << " entries)"
             << std::endl;
     }
 }

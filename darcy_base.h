@@ -123,17 +123,14 @@ namespace darcy
     // Assembly methods
     // -------------------------------------------------------------------------
     void
-    assemble_system(); // Assemble Darcy saddle-point system
-    void
-    assemble_approx_schur_complement(); // Assemble preconditioner matrix
-    void
-    assemble_system_and_schur(); // Merged assembly of both matrices
+    assemble_system_and_schur(); // Assemble Darcy saddle-point system + Schur
 
     // -------------------------------------------------------------------------
     // Solver
     // -------------------------------------------------------------------------
     void
-    solve(const bool solve_adjoint = false); // GMRES with block preconditioner
+    solve(); // GMRES with block preconditioner (system is symmetric, so the
+             // same call serves both the forward and adjoint solves)
 
     // -------------------------------------------------------------------------
     // Input methods
@@ -323,311 +320,6 @@ namespace darcy
                                      const unsigned int) const
   {
     return 0.0;
-  }
-
-  template <int dim>
-  void
-  DarcyBase<dim>::assemble_approx_schur_complement()
-  {
-    TimerOutput::Scope timer_section(this->computing_timer,
-                                     "   Assemble approx. Schur compl.");
-    this->pcout << "Assemble approx. Schur complement..." << std::endl;
-    this->precondition_matrix = 0;
-    const QGauss<dim>     quadrature_formula(this->degree_p + 1);
-    const QGauss<dim - 1> face_quadrature_formula(this->degree_p + 1);
-
-    const MappingQ<dim> mapping(2);
-
-    FEValues<dim>      fe_values(mapping,
-                            this->fe,
-                            quadrature_formula,
-                            update_JxW_values | update_values |
-                              update_quadrature_points | update_gradients);
-    FEFaceValues<dim>  fe_face_values(mapping,
-                                     this->fe,
-                                     face_quadrature_formula,
-                                     update_values | update_gradients |
-                                       update_normal_vectors |
-                                       update_quadrature_points |
-                                       update_JxW_values);
-    FEValues<dim>      fe_rf_values(mapping,
-                               this->rf_fe_system,
-                               quadrature_formula,
-                               update_values | update_quadrature_points);
-    const unsigned int dofs_per_cell   = this->fe.n_dofs_per_cell();
-    const unsigned int n_q_points      = fe_values.n_quadrature_points;
-    const unsigned int n_face_q_points = fe_face_values.n_quadrature_points;
-    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
-    FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
-    this->x_vec_distributed = this->x_vec;
-
-    for (const auto &cell_tria : this->triangulation.active_cell_iterators())
-      {
-        const auto &cell =
-          cell_tria->as_dof_handler_iterator(this->dof_handler);
-        const auto &rf_cell =
-          cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
-
-        if (cell->is_locally_owned())
-          {
-            cell->get_dof_indices(local_dof_indices);
-            fe_values.reinit(cell);
-            fe_rf_values.reinit(rf_cell);
-
-            cell->get_dof_indices(local_dof_indices);
-
-            const FEValuesExtractors::Scalar pressure(dim);
-
-            local_matrix = 0;
-
-            std::vector<double> rf_values(n_q_points);
-            Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(this->x_vec_distributed,
-                                             rf_values);
-
-            for (unsigned int q = 0; q < n_q_points; ++q)
-              {
-                RandomMedium::get_k_mat(rf_values[q], K_mat);
-
-                const auto                  JxW_q = fe_values.JxW(q);
-                std::vector<Tensor<1, dim>> grad_phi_p(dofs_per_cell);
-                for (unsigned int k = 0; k < dofs_per_cell; ++k)
-                  grad_phi_p[k] = fe_values[pressure].gradient(k, q);
-
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                  for (unsigned int j = 0; j <= i; ++j)
-                    local_matrix(i, j) +=
-                      (K_mat * grad_phi_p[i] * grad_phi_p[j]) * JxW_q;
-              }
-
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
-              for (unsigned int j = i + 1; j < dofs_per_cell; ++j)
-                local_matrix(i, j) = local_matrix(j, i);
-
-            for (const auto &face : cell->face_iterators())
-              {
-                if (face->at_boundary() && face->boundary_id() == 1)
-                  {
-                    fe_face_values.reinit(cell, face);
-
-                    const auto tau =
-                      5. * Utilities::fixed_power<2>(this->degree_p + 1) /
-                      cell->diameter();
-
-                    for (unsigned int q = 0; q < n_face_q_points; ++q)
-                      {
-                        const auto normal = fe_face_values.normal_vector(q);
-
-                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                          {
-                            const double phi_i_p =
-                              fe_face_values[pressure].value(i, q);
-
-                            const auto grad_phi_i_p =
-                              fe_face_values[pressure].gradient(i, q);
-
-                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                              {
-                                const double phi_j_p =
-                                  fe_face_values[pressure].value(j, q);
-
-                                const auto grad_phi_j_p =
-                                  fe_face_values[pressure].gradient(j, q);
-
-                                local_matrix(i, j) +=
-                                  (-grad_phi_i_p * normal * phi_j_p -
-                                   (phi_i_p *
-                                    (grad_phi_j_p * normal - tau * phi_j_p))) *
-                                  fe_face_values.JxW(q);
-                              }
-                          }
-                      }
-                  }
-              }
-
-            this->preconditioner_constraints.distribute_local_to_global(
-              local_matrix, local_dof_indices, this->precondition_matrix);
-          }
-      }
-
-    this->precondition_matrix.compress(VectorOperation::add);
-    this->pcout << "Preconditioner successfully assembled" << std::endl;
-  }
-
-  template <int dim>
-  void
-  DarcyBase<dim>::assemble_system()
-  {
-    TimerOutput::Scope timer_section(this->computing_timer,
-                                     "  Assemble system");
-    this->pcout << "Assemble system..." << std::endl;
-
-    this->system_matrix = 0;
-    this->system_rhs    = 0;
-
-    const QGauss<dim>     quadrature_formula(this->degree_u + 1);
-    const QGauss<dim - 1> face_quadrature_formula(this->degree_u + 1);
-
-    const MappingQ<dim> mapping(2);
-
-    FEValues<dim>      fe_values(mapping,
-                            this->fe,
-                            quadrature_formula,
-                            update_values | update_quadrature_points |
-                              update_JxW_values | update_gradients);
-    FEValues<dim>      fe_rf_values(mapping,
-                               this->rf_fe_system,
-                               quadrature_formula,
-                               update_values | update_quadrature_points);
-    FEFaceValues<dim>  fe_face_values(mapping,
-                                     this->fe,
-                                     face_quadrature_formula,
-                                     update_values | update_normal_vectors |
-                                       update_quadrature_points |
-                                       update_JxW_values);
-    const unsigned int dofs_per_cell   = this->fe.n_dofs_per_cell();
-    const unsigned int n_q_points      = fe_values.n_quadrature_points;
-    const unsigned int n_face_q_points = fe_face_values.n_quadrature_points;
-    std::vector<Tensor<1, dim>>          phi_u(dofs_per_cell);
-    std::vector<double>                  div_phi_u(dofs_per_cell);
-    std::vector<double>                  phi_p(dofs_per_cell);
-    std::vector<Tensor<1, dim>>          grad_phi_p(dofs_per_cell);
-    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
-    FullMatrix<double> local_matrix(dofs_per_cell, dofs_per_cell);
-    Vector<double>     local_rhs(dofs_per_cell);
-
-    for (const auto &cell_tria : this->triangulation.active_cell_iterators())
-      {
-        const auto &cell =
-          cell_tria->as_dof_handler_iterator(this->dof_handler);
-        const auto &rf_cell =
-          cell_tria->as_dof_handler_iterator(this->rf_dof_handler);
-
-        if (cell->is_locally_owned())
-          {
-            fe_values.reinit(cell);
-            fe_rf_values.reinit(rf_cell);
-            cell->get_dof_indices(local_dof_indices);
-
-            const FEValuesExtractors::Vector velocities(0);
-            const FEValuesExtractors::Scalar pressure(dim);
-
-            local_matrix = 0;
-            local_rhs    = 0;
-
-            std::vector<double> boundary_values_pressure(n_face_q_points);
-            const PressureBoundaryValues<dim> pressure_boundary_values;
-
-            std::vector<double> rf_values(n_q_points);
-            Tensor<2, dim>      K_mat;
-            fe_rf_values.get_function_values(this->x_vec_distributed,
-                                             rf_values);
-
-            for (unsigned int q = 0; q < n_q_points; ++q)
-              {
-                RandomMedium::get_k_mat(rf_values[q], K_mat);
-                const Tensor<2, dim> k_inverse = invert(K_mat);
-
-                for (unsigned int k = 0; k < dofs_per_cell; ++k)
-                  {
-                    phi_u[k]      = fe_values[velocities].value(k, q);
-                    div_phi_u[k]  = fe_values[velocities].divergence(k, q);
-                    phi_p[k]      = fe_values[pressure].value(k, q);
-                    grad_phi_p[k] = fe_values[pressure].gradient(k, q);
-                  }
-
-                for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                  {
-                    for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                      {
-                        local_matrix(i, j) +=
-                          (phi_u[i] * k_inverse * phi_u[j] -
-                           phi_p[j] * div_phi_u[i] + grad_phi_p[i] * phi_u[j]) *
-                          fe_values.JxW(q);
-                      }
-
-                    local_rhs(i) += (-phi_p[i] * 1.0) * fe_values.JxW(q);
-                  }
-              }
-
-            for (const auto &face : cell->face_iterators())
-              {
-                if (face->at_boundary() && face->boundary_id() == 1)
-                  {
-                    fe_face_values.reinit(cell, face);
-
-                    pressure_boundary_values.value_list(
-                      fe_face_values.get_quadrature_points(),
-                      boundary_values_pressure);
-
-                    for (unsigned int q = 0; q < n_face_q_points; ++q)
-                      {
-                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                          {
-                            const Tensor<1, dim> phi_i_u =
-                              fe_face_values[velocities].value(i, q);
-
-                            const double phi_i_p =
-                              fe_face_values[pressure].value(i, q);
-
-                            local_rhs(i) +=
-                              -(phi_i_u * fe_face_values.normal_vector(q) *
-                                boundary_values_pressure[q] *
-                                fe_face_values.JxW(q));
-
-                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                              {
-                                const Tensor<1, dim> phi_j_u =
-                                  fe_face_values[velocities].value(j, q);
-
-                                local_matrix(i, j) -=
-                                  (phi_i_p * (fe_face_values.normal_vector(q) *
-                                              phi_j_u)) *
-                                  fe_face_values.JxW(q);
-                              }
-                          }
-                      }
-                  }
-
-                if (face->at_boundary() && face->boundary_id() == 0)
-                  {
-                    fe_face_values.reinit(cell, face);
-
-                    for (unsigned int q = 0; q < n_face_q_points; ++q)
-                      {
-                        for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                          {
-                            const Tensor<1, dim> phi_i_u =
-                              fe_face_values[velocities].value(i, q);
-
-                            for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                              {
-                                const double phi_j_p =
-                                  fe_face_values[pressure].value(j, q);
-
-                                local_matrix(i, j) +=
-                                  (phi_j_p *
-                                   (phi_i_u * fe_face_values.normal_vector(q)) *
-                                   fe_face_values.JxW(q));
-                              }
-                          }
-                      }
-                  }
-              }
-
-            cell->get_dof_indices(local_dof_indices);
-            this->constraints.distribute_local_to_global(local_matrix,
-                                                         local_rhs,
-                                                         local_dof_indices,
-                                                         this->system_matrix,
-                                                         this->system_rhs);
-          }
-      }
-
-    this->system_matrix.compress(VectorOperation::add);
-    this->system_rhs.compress(VectorOperation::add);
-
-    this->pcout << "System successfully assembled" << std::endl;
   }
 
   template <int dim>
@@ -1043,47 +735,9 @@ namespace darcy
                                       MPI_COMM_WORLD);
   }
 
-  template <typename MatrixType>
-  class TransposeOperator : public EnableObserverPointer
-  {
-  public:
-    TransposeOperator(const MatrixType &matrix)
-      : matrix(matrix)
-    {}
-
-    template <typename VectorType>
-    void
-    vmult(VectorType &dst, const VectorType &src) const
-    {
-      matrix.Tvmult(dst, src);
-    }
-
-    template <typename VectorType>
-    void
-    Tvmult(VectorType &dst, const VectorType &src) const
-    {
-      matrix.vmult(dst, src);
-    }
-
-    types::global_dof_index
-    m() const
-    {
-      return matrix.n();
-    }
-
-    types::global_dof_index
-    n() const
-    {
-      return matrix.m();
-    }
-
-  private:
-    const MatrixType &matrix;
-  };
-
   template <int dim>
   void
-  DarcyBase<dim>::solve(const bool adjoint_solve)
+  DarcyBase<dim>::solve()
   {
     TimerOutput::Scope timer_section(this->computing_timer, "   Solve system");
     const auto        &M    = this->system_matrix.block(0, 0);
@@ -1145,26 +799,14 @@ namespace darcy
     this->pcout << "Starting iterative solver..." << std::endl;
     {
       TimerOutput::Scope timer_section(this->computing_timer, "   Solve gmres");
-      if (adjoint_solve)
-        {
-          TransposeOperator<decltype(this->system_matrix)> system_transposed(
-            this->system_matrix);
-
-          TransposeOperator<decltype(block_preconditioner)>
-            preconditioner_transposed(block_preconditioner);
-
-          solver_system.solve(system_transposed,
-                              distributed_solution,
-                              this->system_rhs,
-                              preconditioner_transposed);
-        }
-      else
-        {
-          solver_system.solve(this->system_matrix,
-                              distributed_solution,
-                              this->system_rhs,
-                              block_preconditioner);
-        }
+      // The Darcy saddle-point system A is symmetric (integration-by-parts
+      // boundary terms in assemble_system_and_schur make the off-diagonals
+      // match), so the adjoint solve A^T lambda = g is identical to the
+      // forward solve with a different RHS — no transposed operator needed.
+      solver_system.solve(this->system_matrix,
+                          distributed_solution,
+                          this->system_rhs,
+                          block_preconditioner);
     }
     this->constraints.distribute(distributed_solution);
     this->solution = distributed_solution;
