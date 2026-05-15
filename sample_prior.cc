@@ -1,14 +1,18 @@
 // sample_prior.cc
-// MPI-parallel executable to draw samples from the GMRF prior x ~ N(0, Q^{-1})
-// where Q = G + nugget*M on the same eccentric hyper-shell mesh used by the
+// Standalone, one-shot diagnostic executable used to visualize the SPDE prior
+// field. Not part of the inversion pipeline: it shares the parameter struct
+// only for mesh/FE settings and exposes its own --nugget and --tau CLI flags
+// (the JSON "nugget" entry is intentionally not consulted here).
+//
+// Draws samples from the SPDE prior with covariance Q^{-1} M Q^{-1}, where
+// Q = G + nugget*M on the same eccentric hyper-shell mesh used by the
 // forward/adjoint solvers.
 //
-// Sampling method (element-wise Cholesky + CG solve):
-//   1. Generate w ~ N(0, Q) by assembling element-wise: for each cell compute
-//      Q_e = G_e + nugget*M_e, dense Cholesky Q_e = L_e L_e^T, then
-//      w_e = L_e v_e with v_e ~ N(0, I). Assembly gives w ~ N(0, sum Q_e) =
-//      N(0, Q).
-//   2. Solve Q z = w using CG. Then z = Q^{-1} w ~ N(0, Q^{-1}).
+// Sampling method (element-wise mass Cholesky + CG solve):
+//   1. Generate w ~ N(0, M) by assembling element-wise: for each cell compute
+//      M_e, dense Cholesky M_e = L_e L_e^T, then w_e = L_e v_e with
+//      v_e ~ N(0, I). Assembly gives w ~ N(0, sum M_e) = N(0, M).
+//   2. Solve Q z = w using CG. Then z ~ N(0, Q^{-1} M Q^{-1}) (SPDE prior).
 //
 // Usage:
 //   mpirun -np <num_procs> ./sample_prior <parameter_file.json>

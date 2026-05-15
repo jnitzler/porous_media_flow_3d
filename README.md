@@ -16,7 +16,7 @@ The project builds four executables:
 1. `darcy_forward`: Forward solve $\boldsymbol{y} = f(\boldsymbol{x})$ for given random field coefficients
 2. `darcy_adjoint`: Adjoint solve returning the gradient $\frac{\partial g(f(\boldsymbol{x}))}{\partial \boldsymbol{x}}$
 3. `export_sparsity`: Exports the prior precision matrix sparsity pattern and values (COO format as `.npy` files). This is needed to construct a sparse variational approximation in the stochastic variational inference (SVI) framework — the FE mesh-induced sparsity pattern of $Q$ motivates the sparsity structure of the variational precision matrix, ensuring the approximation respects the local correlation structure of the prior.
-4. `sample_prior`: Draws samples from the GMRF prior $\boldsymbol{x} \sim \mathcal{N}(0, Q^{-1})$ by solving $Q \boldsymbol{z} = \boldsymbol{w}$ with $\boldsymbol{w} \sim \mathcal{N}(0, I)$. Useful for visualizing and diagnosing the prior field.
+4. `sample_prior`: Draws samples from the SPDE prior $\boldsymbol{x} \sim \mathcal{N}(0, Q^{-1} M Q^{-1})$ by generating $\boldsymbol{w} \sim \mathcal{N}(0, M)$ via element-wise mass-matrix Cholesky and then solving $Q \boldsymbol{z} = \boldsymbol{w}$. Useful for visualizing and diagnosing the prior field. The executable is a standalone diagnostic — it shares the parameter struct only for mesh/FE settings and exposes its own `--nugget` / `--tau` flags.
 
 Both the forward and adjoint executables support 2D and 3D via the `spatial dimension` parameter.
 
@@ -33,8 +33,11 @@ The executables use deal.II's `ParameterHandler` to read configuration from a JS
 | `random field fe degree` | Discretization | 2 | Polynomial degree for random field FE |
 | `refinement level` | Discretization | 4 | Global mesh refinement level |
 | `refinement level obs` | Discretization | 3 | Observation mesh refinement level |
-| `nugget` | Prior | 1e-6 | Nugget for Markov prior: $Q = G + \varepsilon M$ |
+| `nugget` | Prior | 1e-6 | Nugget $\varepsilon$ in $Q = G + \varepsilon M$ |
+| `fixed prior precision` | Prior | false | If true, skip the EM update and use a fixed precision scaling |
+| `prior precision value` | Prior | 1.0 | Fixed value of $z = a/b$ (only used when `fixed prior precision` is true) |
 | `ground truth` | Input/Output | false | Use analytical reference field instead of reading from file |
+| `export random field` | Input/Output | false | Export the log-permeability DOF vector as `.npy` (forward only) |
 | `input npy file` | Input/Output | — | Path to random field coefficients (.npy) |
 | `output directory` | Input/Output | `output` | Results directory |
 | `output prefix` | Input/Output | `""` | Filename prefix for outputs |
@@ -42,9 +45,11 @@ The executables use deal.II's `ParameterHandler` to read configuration from a JS
 
 ### Prior
 
-The adjoint solver uses a Markov prior with precision matrix $Q = G + \varepsilon M$, where $G$ is the stiffness (Laplacian) matrix, $M$ the mass matrix, and $\varepsilon$ the nugget term. The precision scaling $z$ is updated adaptively via a conjugate Gamma hyper-prior (Student-t-like behavior):
+The adjoint solver uses an SPDE-Matérn-style prior whose full precision matrix is $Q M^{-1} Q$, where $Q = G + \varepsilon M$ is the SPDE operator built from the stiffness matrix $G$, the mass matrix $M$, and the nugget $\varepsilon$. The corresponding prior covariance is $Q^{-1} M Q^{-1}$. The precision scaling $z$ is updated adaptively via a conjugate Gamma hyper-prior (Student-t-like behavior):
 
-$$z = \frac{a_0 + n/2}{b_0 + \frac{1}{2}(\boldsymbol{x} - \boldsymbol{\mu})^T Q (\boldsymbol{x} - \boldsymbol{\mu})}$$
+$$z = \frac{a_0 + n/2}{b_0 + \frac{1}{2}(\boldsymbol{x} - \boldsymbol{\mu})^T Q M^{-1} Q\, (\boldsymbol{x} - \boldsymbol{\mu})}$$
+
+Setting `fixed prior precision: true` disables the update above and uses `prior precision value` as a constant $z$ instead — useful for MAP-style comparisons.
 
 ### Example JSON configuration
 
@@ -58,7 +63,9 @@ $$z = \frac{a_0 + n/2}{b_0 + \frac{1}{2}(\boldsymbol{x} - \boldsymbol{\mu})^T Q 
     "refinement level obs": 3
   },
   "Prior": {
-    "nugget": 1.0e-4
+    "nugget": 1.0e-4,
+    "fixed prior precision": false,
+    "prior precision value": 1.0
   },
   "Input/Output": {
     "ground truth": false,

@@ -14,7 +14,6 @@
 #include <deal.II/numerics/rtree.h>
 #include <filesystem>
 #include <map>
-#include <unordered_map>
 
 #include "darcy_base.h"
 
@@ -528,14 +527,16 @@ namespace darcy
       {
         const double a0 = 1e-9;
         const double b0 = 1e-9;
-        const double a =
-          a0 + n_dofs / 2.0; // VB EM baseline: full parameter count n
-        // MacKay/RVM evidence approx (disabled): use N_obs as effective
-        // data-informed DoF count. Required under degenerate alpha*I
-        // variational family where tr(A*Sigma_q) ~ 0 and the baseline's trace
-        // stabilizer is missing, so n must be replaced by N_obs by hand. const
-        // double n_obs = static_cast<double>(adjoint_data_vec.size()); const
-        // double a     = a0 + n_obs / 2.0;
+        // VB EM baseline: full parameter count n in the numerator.
+        const double a = a0 + n_dofs / 2.0;
+        // Alternative kept for the MAP comparison study (MacKay/RVM evidence
+        // approximation): use N_obs as the effective data-informed DoF count.
+        // Required under a degenerate alpha*I variational family where
+        // tr(A*Sigma_q) ~ 0 and the baseline's trace stabilizer is missing,
+        // so n must be replaced by N_obs by hand. Swap the `a` definition
+        // above with the two lines below to activate.
+        //   const double n_obs = static_cast<double>(adjoint_data_vec.size());
+        //   const double a     = a0 + n_obs / 2.0;
         const double b = b0 + 0.5 * q;
         z              = a / b;
         this->pcout << "  Precision scaling z = " << z << " (EM, q = " << q
@@ -717,8 +718,8 @@ namespace darcy
                                         n_digits_counter,
                                         num_vtu_files);
 
-    this->pcout << "DEBUG: Wrote adjoint solution to " << stripped_path
-                << filename << ".pvtu" << std::endl;
+    this->pcout << "Wrote adjoint solution to " << stripped_path << filename
+                << ".pvtu" << std::endl;
   }
 
   template <int dim>

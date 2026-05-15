@@ -18,3 +18,12 @@ input/
 CLAUDE.md
 .claude/
 
+# ignore generated numerical artifacts (sparsity exports, priors,
+# variational params, ground-truth fields)
+*.npy
+
+# ignore screenshots / images in repo root
+*.png
+*.jpg
+*.jpeg
+
